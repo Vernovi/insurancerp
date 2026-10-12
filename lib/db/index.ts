@@ -26,8 +26,17 @@ async function connect(): Promise<DB> {
       await client.query("SELECT pg_advisory_lock(73191)");
       await client.query(schema.BOOTSTRAP_SQL);
       const clientDb = drizzlePg(client, { schema }) as unknown as DB;
-      await syncRecordTypes(clientDb);
-      await seedIfEmpty(clientDb);
+      // One transaction: an interrupted first boot (e.g. a function timeout) rolls back
+      // completely and the next request seeds again from scratch.
+      await client.query("BEGIN");
+      try {
+        await syncRecordTypes(clientDb);
+        await seedIfEmpty(clientDb);
+        await client.query("COMMIT");
+      } catch (e) {
+        await client.query("ROLLBACK").catch(() => {});
+        throw e;
+      }
     } finally {
       await client.query("SELECT pg_advisory_unlock(73191)").catch(() => {});
       client.release();

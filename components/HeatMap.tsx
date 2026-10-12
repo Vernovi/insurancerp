@@ -15,12 +15,16 @@ function cellClass(s: number) {
 export default function HeatMap({ risks, caption }: { risks: HeatRisk[]; caption: string }) {
   return (
     <figure>
-      <table className="w-full border-separate border-spacing-1 text-sm">
+      <table className="w-full table-fixed border-separate border-spacing-1 text-sm">
         <caption className="sr-only">{caption}</caption>
+        <colgroup>
+          <col className="w-20 sm:w-28" />
+          <col /><col /><col /><col /><col />
+        </colgroup>
         <tbody>
           {[5, 4, 3, 2, 1].map((l) => (
             <tr key={l}>
-              <th scope="row" className="w-28 pr-2 text-right text-xs font-normal text-ink-2">
+              <th scope="row" className="pr-2 text-right text-xs font-normal leading-tight text-ink-2">
                 {l} {LIKELIHOOD[l - 1]}
               </th>
               {[1, 2, 3, 4, 5].map((i) => {
@@ -48,7 +52,7 @@ export default function HeatMap({ risks, caption }: { risks: HeatRisk[]; caption
           <tr>
             <td />
             {IMPACT.map((x, idx) => (
-              <th key={x} scope="col" className="pt-1 text-center text-xs font-normal text-ink-2">
+              <th key={x} scope="col" className="pt-1 text-center text-xs font-normal leading-tight text-ink-2">
                 {idx + 1} {x}
               </th>
             ))}

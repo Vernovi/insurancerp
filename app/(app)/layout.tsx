@@ -53,16 +53,16 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             Demo database: data resets when the server restarts. Connect Neon (DATABASE_URL) to keep it.
           </div>
         )}
-        <header className="no-print sticky top-0 z-10 flex items-center gap-4 border-b border-line bg-surface/95 px-6 py-3 backdrop-blur">
-          <form action="/search" className="flex-1 max-w-md">
+        <header className="no-print sticky top-0 z-10 flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-line bg-surface/95 px-4 py-3 backdrop-blur sm:px-6">
+          <form action="/search" className="order-last w-full sm:order-none sm:w-auto sm:flex-1 sm:max-w-md">
             <label className="sr-only" htmlFor="q">Search records</label>
             <input id="q" name="q" placeholder="Search by reference, title or content" className="field-input" />
           </form>
-          <Link href="/notifications" className="relative text-sm text-ink-2 hover:text-ink">
+          <Link href="/notifications" className="relative mr-auto text-sm text-ink-2 hover:text-ink sm:mr-0">
             Notifications
             {Number(unread) > 0 && <span className="ml-1.5 rounded bg-accent px-1.5 py-0.5 text-xs font-semibold text-white">{Number(unread)}</span>}
           </Link>
-          <div className="text-right text-sm leading-tight">
+          <div className="hidden text-right text-sm leading-tight sm:block">
             <p className="font-semibold">{user.name}</p>
             <p className="text-xs text-ink-3">{user.title}</p>
           </div>
@@ -70,7 +70,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             <button className="btn btn-secondary">Sign out</button>
           </form>
         </header>
-        <main className="px-6 py-6 max-w-[1400px]">{children}</main>
+        <main className="px-4 py-6 sm:px-6 max-w-[1400px]">{children}</main>
       </div>
     </div>
   );

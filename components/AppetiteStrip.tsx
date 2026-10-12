@@ -12,8 +12,8 @@ const pos = (s: number) => `${((s - 1) / 24) * 100}%`;
 export default function AppetiteStrip({ rows }: { rows: StripRow[] }) {
   return (
     <div className="space-y-1">
-      <div className="grid grid-cols-[11rem_1fr] gap-3 text-xs text-ink-3">
-        <span />
+      <div className="grid grid-cols-1 sm:grid-cols-[11rem_1fr] gap-3 text-xs text-ink-3">
+        <span className="hidden sm:block" />
         <div className="relative h-4">
           {[1, 5, 10, 15, 20, 25].map((t) => (
             <span key={t} className="absolute -translate-x-1/2" style={{ left: pos(t) }}>{t}</span>
@@ -25,7 +25,7 @@ export default function AppetiteStrip({ rows }: { rows: StripRow[] }) {
         const outside = th !== null ? row.risks.filter((r) => r.residual > th).length : 0;
         const seen = new Map<number, number>();
         return (
-          <div key={row.category} className="grid grid-cols-[11rem_1fr] items-center gap-3">
+          <div key={row.category} className="grid grid-cols-1 sm:grid-cols-[11rem_1fr] items-center gap-x-3 gap-y-1 pb-2 sm:pb-0">
             <div className="text-sm leading-tight">
               <p className="font-semibold">{row.category}</p>
               <p className="text-xs text-ink-3">

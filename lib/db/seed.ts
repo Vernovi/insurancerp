@@ -24,9 +24,22 @@ export async function syncRecordTypes(db: DB) {
 
 export const DEMO_PASSWORD = process.env.DEMO_PASSWORD ?? "Demo!2026grc";
 
+const DATA_TABLES = ["records", "record_links", "record_versions", "comments", "audit_log", "notifications", "snapshots", "counters", "users", "org_units", "api_tokens"];
+
 export async function seedIfEmpty(db: DB) {
   const [{ n }] = (await db.execute(sql`SELECT count(*)::int AS n FROM users`)).rows as { n: number }[];
-  if (Number(n) > 0) return;
+  const done = (await db.execute(sql`SELECT 1 FROM app_settings WHERE key = 'seed_complete'`)).rows.length > 0;
+  if (Number(n) > 0) {
+    if (done) return;
+    // Users exist but no completion marker: either an older complete install, or a demo
+    // seed that was cut off before this release made seeding transactional.
+    const [{ r }] = (await db.execute(sql`SELECT count(*)::int AS r FROM records`)).rows as { r: number }[];
+    if (process.env.SEED_DEMO === "false" || Number(r) >= 100) {
+      await db.execute(sql`INSERT INTO app_settings (key, value) VALUES ('seed_complete', now()::text) ON CONFLICT (key) DO NOTHING`);
+      return;
+    }
+    await db.execute(sql.raw(`TRUNCATE ${DATA_TABLES.join(", ")} RESTART IDENTITY`));
+  }
   if (process.env.SEED_DEMO === "false") {
     // Production without demo data: create the first administrator only.
     await db.insert(schema.users).values({
@@ -35,9 +48,10 @@ export async function seedIfEmpty(db: DB) {
       passwordHash: hashPassword(process.env.ADMIN_PASSWORD ?? DEMO_PASSWORD),
       roles: ["admin"],
     });
-    return;
+  } else {
+    await seedDemo(db);
   }
-  await seedDemo(db);
+  await db.execute(sql`INSERT INTO app_settings (key, value) VALUES ('seed_complete', now()::text) ON CONFLICT (key) DO NOTHING`);
 }
 
 const d = (days: number) => addDays(today(), days);
