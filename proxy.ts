@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 const PUBLIC = ["/login", "/portal", "/api/v1", "/api/cron", "/_next", "/favicon"];
 
-export function middleware(req: NextRequest) {
+export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
   if (PUBLIC.some((p) => pathname.startsWith(p))) return NextResponse.next();
   if (!req.cookies.get("grc_session")) {
