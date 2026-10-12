@@ -1,0 +1,450 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Department {
+  id         String      @id
+  name       String
+  code       String      @unique
+  users      User[]
+  risks      Risk[]
+  objectives Objective[]
+}
+
+model User {
+  id                   String              @id
+  email                String              @unique
+  name                 String
+  passwordHash         String
+  role                 String
+  title                String
+  departmentId         String?
+  department           Department?         @relation(fields: [departmentId], references: [id])
+  active               Boolean             @default(true)
+  createdAt            DateTime            @default(now())
+  risksOwned           Risk[]              @relation("RiskOwner")
+  escalations          Risk[]              @relation("RiskEscalator")
+  controlsOwned        Control[]           @relation("ControlOwner")
+  krisOwned            Kri[]               @relation("KriOwner")
+  appetiteOwned        RiskAppetiteLimit[] @relation("AppetiteOwner")
+  policiesOwned        Policy[]            @relation("PolicyOwner")
+  versionsAuthored     PolicyVersion[]     @relation("VersionAuthor")
+  versionsApproved     PolicyVersion[]     @relation("VersionApprover")
+  attestations         PolicyAttestation[]
+  assessments          Assessment[]        @relation("Assessor")
+  evidenceUploaded     Evidence[]          @relation("EvidenceUploader")
+  actionsOwned         ActionItem[]        @relation("ActionOwner")
+  findingsOwned        Finding[]           @relation("FindingOwner")
+  declarations         Declaration[]       @relation("DeclarationSubject")
+  declarationsReviewed Declaration[]       @relation("DeclarationReviewer")
+  objectivesOwned      Objective[]         @relation("ObjectiveOwner")
+  scores               KpiScore[]          @relation("ScoreAuthor")
+  appraisalsSubject    Appraisal[]         @relation("AppraisalSubject")
+  appraisalsReviewed   Appraisal[]         @relation("AppraisalReviewer")
+  attachments          Attachment[]        @relation("AttachmentUploader")
+}
+
+model RiskAppetiteLimit {
+  id               String   @id
+  category         String   @unique
+  maxResidualScore Int
+  statement        String
+  ownerId          String
+  owner            User     @relation("AppetiteOwner", fields: [ownerId], references: [id])
+  reviewDate       DateTime
+}
+
+model Risk {
+  id                   String        @id
+  code                 String        @unique
+  title                String
+  description          String
+  category             String
+  lineOfBusiness       String
+  departmentId         String
+  department           Department    @relation(fields: [departmentId], references: [id])
+  ownerId              String
+  owner                User          @relation("RiskOwner", fields: [ownerId], references: [id])
+  likelihoodInherent   Int
+  impactInherent       Int
+  likelihoodResidual   Int
+  impactResidual       Int
+  inherentScore        Int
+  residualScore        Int
+  treatment            String
+  status               String
+  trend                String
+  emerging             Boolean       @default(false)
+  strategicObjective   String
+  escalationStatus     String        @default("NONE")
+  escalationNote       String?
+  escalatedAt          DateTime?
+  escalatedById        String?
+  escalatedBy          User?         @relation("RiskEscalator", fields: [escalatedById], references: [id])
+  reviewDate           DateTime?
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+  controls             RiskControl[]
+  kris                 Kri[]
+  actions              ActionItem[]
+  findings             Finding[]
+  objectives           Objective[]
+}
+
+model Control {
+  id            String               @id
+  code          String               @unique
+  name          String
+  description   String
+  type          String
+  frequency     String
+  effectiveness String
+  ownerId       String
+  owner         User                 @relation("ControlOwner", fields: [ownerId], references: [id])
+  lastTestedAt  DateTime?
+  risks         RiskControl[]
+  requirements  RequirementControl[]
+}
+
+model RiskControl {
+  riskId    String
+  controlId String
+  risk      Risk    @relation(fields: [riskId], references: [id], onDelete: Cascade)
+  control   Control @relation(fields: [controlId], references: [id], onDelete: Cascade)
+
+  @@id([riskId, controlId])
+}
+
+model Kri {
+  id              String   @id
+  code            String   @unique
+  name            String
+  description     String
+  unit            String
+  direction       String
+  greenThreshold  Float
+  amberThreshold  Float
+  currentValue    Float
+  frequency       String
+  measuredAt      DateTime
+  category        String
+  riskId          String?
+  risk            Risk?    @relation(fields: [riskId], references: [id])
+  ownerId         String
+  owner           User     @relation("KriOwner", fields: [ownerId], references: [id])
+}
+
+model Policy {
+  id                String                      @id
+  code              String                      @unique
+  title             String
+  category          String
+  summary           String
+  ownerId           String
+  owner             User                        @relation("PolicyOwner", fields: [ownerId], references: [id])
+  status            String
+  lastReviewDate    DateTime?
+  nextReviewDate    DateTime
+  versions          PolicyVersion[]
+  attestations      PolicyAttestation[]
+  campaigns         AttestationCampaign[]
+  requirements      RequirementPolicy[]
+  declarationLinks  DeclarationCampaignPolicy[]
+}
+
+model PolicyVersion {
+  id           String    @id
+  policyId     String
+  policy       Policy    @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  versionLabel String
+  content      String
+  changeNotes  String
+  status       String
+  authorId     String
+  author       User      @relation("VersionAuthor", fields: [authorId], references: [id])
+  approvedById String?
+  approver     User?     @relation("VersionApprover", fields: [approvedById], references: [id])
+  approvedAt   DateTime?
+  createdAt    DateTime  @default(now())
+}
+
+model AttestationCampaign {
+  id                    String              @id
+  name                  String
+  policyId              String
+  policy                Policy              @relation(fields: [policyId], references: [id])
+  dueDate               DateTime
+  declarationCampaignId String?
+  declarationCampaign   DeclarationCampaign? @relation(fields: [declarationCampaignId], references: [id])
+  attestations          PolicyAttestation[]
+}
+
+model PolicyAttestation {
+  id            String              @id
+  campaignId    String
+  campaign      AttestationCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  policyId      String
+  policy        Policy              @relation(fields: [policyId], references: [id])
+  userId        String
+  user          User                @relation(fields: [userId], references: [id])
+  status        String
+  attestedAt    DateTime?
+  declarationId String?
+  declaration   Declaration?        @relation(fields: [declarationId], references: [id])
+
+  @@unique([campaignId, userId])
+}
+
+model DeclarationCampaign {
+  id                   String                      @id
+  type                 String
+  name                 String
+  year                 Int
+  dueDate              DateTime
+  status               String
+  policies             DeclarationCampaignPolicy[]
+  declarations         Declaration[]
+  attestationCampaigns AttestationCampaign[]
+}
+
+model DeclarationCampaignPolicy {
+  campaignId String
+  policyId   String
+  campaign   DeclarationCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  policy     Policy              @relation(fields: [policyId], references: [id])
+
+  @@id([campaignId, policyId])
+}
+
+model Declaration {
+  id           String              @id
+  campaignId   String
+  campaign     DeclarationCampaign @relation(fields: [campaignId], references: [id])
+  userId       String
+  user         User                @relation("DeclarationSubject", fields: [userId], references: [id])
+  type         String
+  status       String
+  payload      String
+  submittedAt  DateTime?
+  reviewedById String?
+  reviewer     User?               @relation("DeclarationReviewer", fields: [reviewedById], references: [id])
+  reviewedAt   DateTime?
+  reviewNotes  String?
+  attestations PolicyAttestation[]
+
+  @@unique([campaignId, userId])
+}
+
+model Framework {
+  id           String        @id
+  code         String        @unique
+  name         String
+  authority    String
+  citation     String
+  sourceUrl    String
+  description  String
+  versionLabel String
+  requirements Requirement[]
+}
+
+model Requirement {
+  id           String               @id
+  frameworkId  String
+  framework    Framework            @relation(fields: [frameworkId], references: [id], onDelete: Cascade)
+  code         String
+  title        String
+  text         String
+  citation     String
+  sortOrder    Int
+  controls     RequirementControl[]
+  policies     RequirementPolicy[]
+  assessments  Assessment[]
+  evidence     Evidence[]
+  actions      ActionItem[]
+  findings     Finding[]
+  objectives   Objective[]
+
+  @@unique([frameworkId, code])
+}
+
+model RequirementControl {
+  requirementId String
+  controlId     String
+  requirement   Requirement @relation(fields: [requirementId], references: [id], onDelete: Cascade)
+  control       Control     @relation(fields: [controlId], references: [id], onDelete: Cascade)
+
+  @@id([requirementId, controlId])
+}
+
+model RequirementPolicy {
+  requirementId String
+  policyId      String
+  requirement   Requirement @relation(fields: [requirementId], references: [id], onDelete: Cascade)
+  policy        Policy      @relation(fields: [policyId], references: [id], onDelete: Cascade)
+
+  @@id([requirementId, policyId])
+}
+
+model Assessment {
+  id            String      @id
+  requirementId String
+  requirement   Requirement @relation(fields: [requirementId], references: [id], onDelete: Cascade)
+  period        String
+  status        String
+  notes         String
+  assessorId    String
+  assessor      User        @relation("Assessor", fields: [assessorId], references: [id])
+  assessedAt    DateTime
+
+  @@unique([requirementId, period])
+}
+
+model Evidence {
+  id            String      @id
+  requirementId String
+  requirement   Requirement @relation(fields: [requirementId], references: [id], onDelete: Cascade)
+  title         String
+  description   String
+  reference     String
+  attachmentId  String?
+  uploadedById  String
+  uploader      User        @relation("EvidenceUploader", fields: [uploadedById], references: [id])
+  uploadedAt    DateTime    @default(now())
+}
+
+model Finding {
+  id            String       @id
+  code          String       @unique
+  title         String
+  description   String
+  source        String
+  severity      String
+  status        String
+  riskId        String?
+  risk          Risk?        @relation(fields: [riskId], references: [id])
+  requirementId String?
+  requirement   Requirement? @relation(fields: [requirementId], references: [id])
+  ownerId       String
+  owner         User         @relation("FindingOwner", fields: [ownerId], references: [id])
+  raisedAt      DateTime
+  actions       ActionItem[]
+}
+
+model ActionItem {
+  id            String       @id
+  code          String       @unique
+  title         String
+  description   String
+  sourceType    String
+  riskId        String?
+  risk          Risk?        @relation(fields: [riskId], references: [id])
+  findingId     String?
+  finding       Finding?     @relation(fields: [findingId], references: [id])
+  requirementId String?
+  requirement   Requirement? @relation(fields: [requirementId], references: [id])
+  ownerId       String
+  owner         User         @relation("ActionOwner", fields: [ownerId], references: [id])
+  dueDate       DateTime
+  status        String
+  priority      String
+  completedAt   DateTime?
+  createdAt     DateTime     @default(now())
+}
+
+model Objective {
+  id            String       @id
+  code          String       @unique
+  title         String
+  description   String
+  ownerId       String
+  owner         User         @relation("ObjectiveOwner", fields: [ownerId], references: [id])
+  departmentId  String
+  department    Department   @relation(fields: [departmentId], references: [id])
+  period        String
+  weight        Int
+  status        String
+  riskId        String?
+  risk          Risk?        @relation(fields: [riskId], references: [id])
+  requirementId String?
+  requirement   Requirement? @relation(fields: [requirementId], references: [id])
+  kpis          Kpi[]
+}
+
+model Kpi {
+  id          String     @id
+  objectiveId String
+  objective   Objective  @relation(fields: [objectiveId], references: [id], onDelete: Cascade)
+  name        String
+  unit        String
+  direction   String
+  target      Float
+  weight      Int
+  scores      KpiScore[]
+}
+
+model KpiScore {
+  id         String   @id
+  kpiId      String
+  kpi        Kpi      @relation(fields: [kpiId], references: [id], onDelete: Cascade)
+  period     String
+  actual     Float
+  score      Float
+  notes      String
+  scoredById String
+  scorer     User     @relation("ScoreAuthor", fields: [scoredById], references: [id])
+  scoredAt   DateTime
+
+  @@unique([kpiId, period])
+}
+
+model Appraisal {
+  id                  String   @id
+  userId              String
+  subject             User     @relation("AppraisalSubject", fields: [userId], references: [id])
+  reviewerId          String
+  reviewer            User     @relation("AppraisalReviewer", fields: [reviewerId], references: [id])
+  period              String
+  overallScore        Float
+  rating              String
+  narrative           String
+  riskComplianceNote  String
+  status              String
+  createdAt           DateTime @default(now())
+}
+
+model AuditEvent {
+  id         String   @id @default(cuid())
+  at         DateTime @default(now())
+  actorId    String?
+  actorName  String
+  actorRole  String?
+  action     String
+  entityType String
+  entityId   String?
+  summary    String
+  detail     String?
+
+  @@index([entityType, entityId])
+  @@index([at])
+}
+
+model Attachment {
+  id           String   @id @default(cuid())
+  entityType   String
+  entityId     String
+  fileName     String
+  mimeType     String
+  sizeBytes    Int
+  storageKey   String
+  uploadedById String
+  uploader     User     @relation("AttachmentUploader", fields: [uploadedById], references: [id])
+  uploadedAt   DateTime @default(now())
+  note         String?
+
+  @@index([entityType, entityId])
+}

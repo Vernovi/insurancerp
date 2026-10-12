@@ -1,0 +1,13 @@
+node_modules
+.next
+data
+prisma/*.db
+prisma/*.db-journal
+.env
+.env.local
+playwright-report
+test-results
+blob-report
+coverage
+*.tsbuildinfo
+npm-debug.log*
