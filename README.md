@@ -49,7 +49,8 @@ multi-line insurer. Demo password for all accounts: `Demo!2026grc` (override wit
 1. Import this repo into Vercel (framework: Next.js).
 2. Storage > Create Database > Neon. This injects `DATABASE_URL`. The schema and seed data are created
    on first request; no migration step is needed.
-3. Set `SESSION_SECRET` (32+ random characters) and `CRON_SECRET`. For a production client, set
+3. Set `CRON_SECRET` so the daily reminder job can run. `SESSION_SECRET` is optional: without it a random
+   signing key is generated in the database on first boot. For a production client, set
    `SEED_DEMO=false`, `ADMIN_EMAIL` and `ADMIN_PASSWORD` to start with a single administrator.
 4. Daily reminders and escalations run from `vercel.json` cron at 06:00 UTC.
 

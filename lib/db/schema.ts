@@ -121,7 +121,14 @@ export const apiTokens = pgTable("api_tokens", {
   revoked: boolean("revoked").notNull().default(false),
 });
 
+export const appSettings = pgTable("app_settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+});
+
 export const BOOTSTRAP_SQL = `
+CREATE TABLE IF NOT EXISTS app_settings (key text PRIMARY KEY, value text NOT NULL);
+INSERT INTO app_settings (key, value) VALUES ('session_secret', replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '')) ON CONFLICT (key) DO NOTHING;
 CREATE TABLE IF NOT EXISTS org_units (id serial PRIMARY KEY, name text NOT NULL, kind text NOT NULL DEFAULT 'division', parent_id integer);
 CREATE TABLE IF NOT EXISTS users (id serial PRIMARY KEY, email text NOT NULL UNIQUE, name text NOT NULL, title text, password_hash text NOT NULL, roles jsonb NOT NULL DEFAULT '[]', org_unit_id integer, manager_id integer, active boolean NOT NULL DEFAULT true, created_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS record_types (key text PRIMARY KEY, module text NOT NULL, def jsonb NOT NULL, sort integer NOT NULL DEFAULT 0, updated_at timestamptz NOT NULL DEFAULT now());
