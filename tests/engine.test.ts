@@ -10,13 +10,14 @@ let db: Awaited<ReturnType<typeof import("../lib/db").getDb>>;
 let schema: typeof import("../lib/db/schema");
 let E: typeof import("../lib/engine/records");
 
+/** Look up a demo user by email local part or first name. */
 async function userByEmail(prefix: string) {
-  const [u] = await db.select().from(schema.users).where(sql`${schema.users.email} like ${prefix + "%"}`);
+  const [u] = await db.select().from(schema.users).where(sql`(${schema.users.email} like ${prefix + "@%"} or ${schema.users.name} ilike ${prefix + " %"})`);
   return { id: u.id, roles: u.roles as never[] };
 }
 /** A user as the app sees them, with walled entities they may not see. */
 async function sessionUser(prefix: string) {
-  const [u] = await db.select().from(schema.users).where(sql`${schema.users.email} like ${prefix + "%"}`);
+  const [u] = await db.select().from(schema.users).where(sql`(${schema.users.email} like ${prefix + "@%"} or ${schema.users.name} ilike ${prefix + " %"})`);
   const walled = (await db.select().from(schema.entities)).filter((e) => e.walled).map((e) => e.id);
   const mine = (u.entityIds ?? []) as number[];
   return { id: u.id, roles: u.roles as never[], deniedEntities: walled.filter((w) => !mine.includes(w)) };
@@ -327,5 +328,22 @@ describe("seeding safety", () => {
     await db.execute(sql`DELETE FROM app_settings WHERE key = 'demo_tenant'`);
     await seedIfEmpty(db);
     expect((await db.select().from(schema.records)).length).toBe(before);
+  });
+});
+
+describe("demo accounts", () => {
+  it("uses role-named emails", async () => {
+    const emails = (await db.select().from(schema.users)).map((u) => u.email);
+    expect(emails).toContain("group.cro@demofinancial.example");
+    expect(emails).toContain("investigator@demofinancial.example");
+    expect(emails).not.toContain("adaeze.okafor@demofinancial.example");
+  });
+  it("renames an older first.last account in place, keeping its id", async () => {
+    const S = await import("../lib/db/seed");
+    const [u] = await db.select().from(schema.users).where(eq(schema.users.email, "hse.esg@demofinancial.example"));
+    await db.update(schema.users).set({ email: "halima.bello@demofinancial.example" }).where(eq(schema.users.id, u.id));
+    await S.renameDemoAccounts(db);
+    const [after] = await db.select().from(schema.users).where(eq(schema.users.id, u.id));
+    expect(after.email).toBe("hse.esg@demofinancial.example");
   });
 });

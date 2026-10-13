@@ -27,6 +27,8 @@ export async function syncRecordTypes(db: DB) {
 /** Bump to reseed demo tenants once on the next boot (never applies when SEED_DEMO=false). */
 export const SEED_VERSION = "2026-10-13-group-v1";
 export const DEMO_DOMAIN = "demofinancial.example";
+export const DEMO_EMAIL_RENAMES: Record<string, string> = {"kemi.adebayo": "erm.committee.chair", "ifeoma.nnaji": "independent.director", "adaeze.okafor": "group.cro", "tunde.bakare": "head.erm", "ngozi.eze": "group.cco", "zainab.lawal": "compliance.officer", "hauwa.sani": "pensions.risk", "kunle.ajayi": "asset.mgmt.risk", "tobi.fashola": "mfb.compliance", "musa.garba": "infra.bank.cco", "ibrahim.musa": "chief.auditor", "chidi.okonkwo": "investigator", "halima.bello": "hse.esg", "funmi.adeyemi": "head.claims", "emeka.nwosu": "head.underwriting", "bola.ogunleye": "group.cfo", "segun.alabi": "group.cio", "amaka.obi": "head.actuarial", "yusuf.danjuma": "risk.champion"};
+
 const LEGACY_DEMO_ADMIN = "admin@demo-insurance.ng";
 /** Local development only. Deployed demos use DEMO_PASSWORD or, without it, a random unknown password. */
 const LOCAL_DEFAULT_PASSWORD = "Demo!2026grc";
@@ -83,6 +85,7 @@ export async function seedIfEmpty(db: DB) {
   const [{ r }] = (await db.execute(sql`SELECT count(*)::int AS r FROM records`)).rows as { r: number }[];
   const current = (await setting(db, "seed_version")) === SEED_VERSION && (await setting(db, "seed_complete")) !== null && Number(r) >= 100;
   if (current) {
+    await renameDemoAccounts(db);
     await syncDemoPassword(db);
     return;
   }
@@ -99,6 +102,14 @@ export async function seedIfEmpty(db: DB) {
   await put(db, "demo_tenant", "Demo Financial Group (fictional)");
   await put(db, "seed_version", SEED_VERSION);
   await put(db, "seed_complete", new Date().toISOString());
+}
+
+/** One-off: move demo accounts from first.last to role-named emails in place, keeping MFA enrolment and history. */
+export async function renameDemoAccounts(db: DB) {
+  for (const [from, to] of Object.entries(DEMO_EMAIL_RENAMES)) {
+    await db.execute(sql`UPDATE users SET email = ${to + "@" + DEMO_DOMAIN} WHERE email = ${from + "@" + DEMO_DOMAIN} AND NOT EXISTS (SELECT 1 FROM users WHERE email = ${to + "@" + DEMO_DOMAIN})`);
+  }
+  await db.execute(sql`UPDATE users SET name = 'Olumide Bankole' WHERE email = ${"admin@" + DEMO_DOMAIN} AND name = 'Platform Admin'`);
 }
 
 /** Apply a changed DEMO_PASSWORD to the demo accounts on boot, so it can be rotated from the host's settings. */
@@ -152,26 +163,26 @@ async function seedDemo(db: DB, password: string) {
   const pw = hashPassword(password);
   const user = async (local: string, name: string, title: string, roles: string[], orgUnitId: number, entityIds: number[], lineOfDefence: string | null, managerId: number | null = null) =>
     (await db.insert(schema.users).values({ email: `${local}@${DEMO_DOMAIN}`, name, title, roles, orgUnitId, managerId, passwordHash: pw, entityIds, lineOfDefence }).returning())[0].id;
-  await user("admin", "Platform Admin", "GRC platform administrator", ["admin"], it, [], null);
-  const kemi = await user("kemi.adebayo", "Kemi Adebayo", "Chair, ERM Committee, Demo Insurance", ["board"], group, [DIP], "Board and oversight");
-  const ifeoma = await user("ifeoma.nnaji", "Ifeoma Nnaji", "Independent Non-Executive Director, Demo Insurance", ["board"], group, [DIP], "Board and oversight");
-  const adaeze = await user("adaeze.okafor", "Adaeze Okafor", "Group Chief Risk Officer", ["cro", "risk"], riskFn, ALL, "Second line");
-  const tunde = await user("tunde.bakare", "Tunde Bakare", "Head of Enterprise Risk, Demo Insurance", ["risk"], riskFn, [DIP, DFG, DAP, DAM, DSL], "Second line", adaeze);
-  const ngozi = await user("ngozi.eze", "Ngozi Eze", "Group Chief Compliance Officer and Head of Enterprise Assurance", ["compliance", "mlro"], compFn, ALL, "Second line");
-  const zainab = await user("zainab.lawal", "Zainab Lawal", "Compliance Officer, Demo Insurance", ["compliance"], compFn, [DIP], "Second line", ngozi);
-  const hauwa = await user("hauwa.sani", "Hauwa Sani", "Head of Risk and Compliance, Demo Pensions", ["risk", "compliance"], riskFn, [DPL], "Second line", ngozi);
-  const kunle = await user("kunle.ajayi", "Kunle Ajayi", "Head of Risk, Demo Asset Management", ["risk"], riskFn, [DAM], "Second line", adaeze);
-  const tobi = await user("tobi.fashola", "Tobi Fashola", "Head of Risk and Compliance, Demo Microfinance Bank", ["risk", "compliance"], riskFn, [DMB], "Second line", ngozi);
-  const musa = await user("musa.garba", "Musa Garba", "Chief Compliance Officer, Demo Infrastructure Bank", ["risk", "compliance"], compFn, [DIB], "Second line", ngozi);
-  const ibrahim = await user("ibrahim.musa", "Ibrahim Musa", "Group Chief Internal Auditor", ["auditor"], auditFn, ALL, "Third line");
-  const chidi = await user("chidi.okonkwo", "Chidi Okonkwo", "Head of Investigations (SIU)", ["investigator"], compFn, ALL, "Second line", ngozi);
-  const halima = await user("halima.bello", "Halima Bello", "Group HSE and Sustainability Lead", ["hse", "esg"], hr, [], "First line");
-  const funmi = await user("funmi.adeyemi", "Funmi Adeyemi", "Head of Claims, Demo Insurance", ["staff"], claims, [DIP], "First line");
-  const emeka = await user("emeka.nwosu", "Emeka Nwosu", "Head of Underwriting, Demo Insurance", ["staff"], nonLife, [DIP], "First line");
-  const bola = await user("bola.ogunleye", "Bola Ogunleye", "Group Chief Financial Officer", ["staff"], finance, ALL, "First line");
-  const segun = await user("segun.alabi", "Segun Alabi", "Group Chief Information Officer", ["staff"], it, [], "First line");
-  const amaka = await user("amaka.obi", "Amaka Obi", "Head of Actuarial, Demo Insurance", ["staff"], finance, [DIP], "First line");
-  const yusuf = await user("yusuf.danjuma", "Yusuf Danjuma", "Branch manager and risk champion, Port Harcourt", ["staff"], ph, [DIP], "First line", emeka);
+  await user("admin", "Olumide Bankole", "GRC platform administrator", ["admin"], it, [], null);
+  const kemi = await user("erm.committee.chair", "Kemi Adebayo", "Chair, ERM Committee, Demo Insurance", ["board"], group, [DIP], "Board and oversight");
+  const ifeoma = await user("independent.director", "Ifeoma Nnaji", "Independent Non-Executive Director, Demo Insurance", ["board"], group, [DIP], "Board and oversight");
+  const adaeze = await user("group.cro", "Adaeze Okafor", "Group Chief Risk Officer", ["cro", "risk"], riskFn, ALL, "Second line");
+  const tunde = await user("head.erm", "Tunde Bakare", "Head of Enterprise Risk, Demo Insurance", ["risk"], riskFn, [DIP, DFG, DAP, DAM, DSL], "Second line", adaeze);
+  const ngozi = await user("group.cco", "Ngozi Eze", "Group Chief Compliance Officer and Head of Enterprise Assurance", ["compliance", "mlro"], compFn, ALL, "Second line");
+  const zainab = await user("compliance.officer", "Zainab Lawal", "Compliance Officer, Demo Insurance", ["compliance"], compFn, [DIP], "Second line", ngozi);
+  const hauwa = await user("pensions.risk", "Hauwa Sani", "Head of Risk and Compliance, Demo Pensions", ["risk", "compliance"], riskFn, [DPL], "Second line", ngozi);
+  const kunle = await user("asset.mgmt.risk", "Kunle Ajayi", "Head of Risk, Demo Asset Management", ["risk"], riskFn, [DAM], "Second line", adaeze);
+  const tobi = await user("mfb.compliance", "Tobi Fashola", "Head of Risk and Compliance, Demo Microfinance Bank", ["risk", "compliance"], riskFn, [DMB], "Second line", ngozi);
+  const musa = await user("infra.bank.cco", "Musa Garba", "Chief Compliance Officer, Demo Infrastructure Bank", ["risk", "compliance"], compFn, [DIB], "Second line", ngozi);
+  const ibrahim = await user("chief.auditor", "Ibrahim Musa", "Group Chief Internal Auditor", ["auditor"], auditFn, ALL, "Third line");
+  const chidi = await user("investigator", "Chidi Okonkwo", "Head of Investigations (SIU)", ["investigator"], compFn, ALL, "Second line", ngozi);
+  const halima = await user("hse.esg", "Halima Bello", "Group HSE and Sustainability Lead", ["hse", "esg"], hr, [], "First line");
+  const funmi = await user("head.claims", "Funmi Adeyemi", "Head of Claims, Demo Insurance", ["staff"], claims, [DIP], "First line");
+  const emeka = await user("head.underwriting", "Emeka Nwosu", "Head of Underwriting, Demo Insurance", ["staff"], nonLife, [DIP], "First line");
+  const bola = await user("group.cfo", "Bola Ogunleye", "Group Chief Financial Officer", ["staff"], finance, ALL, "First line");
+  const segun = await user("group.cio", "Segun Alabi", "Group Chief Information Officer", ["staff"], it, [], "First line");
+  const amaka = await user("head.actuarial", "Amaka Obi", "Head of Actuarial, Demo Insurance", ["staff"], finance, [DIP], "First line");
+  const yusuf = await user("risk.champion", "Yusuf Danjuma", "Branch manager and risk champion, Port Harcourt", ["staff"], ph, [DIP], "First line", emeka);
 
   type Opt = { e?: number | null; ou?: number | null; by?: number };
   const R = (type: string, title: string, ownerId: number | null, data: Record<string, unknown>, status?: string, o: Opt = {}) =>

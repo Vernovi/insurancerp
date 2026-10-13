@@ -54,10 +54,33 @@ npm test             # business rules and end-to-end workflow tests
 
 Without `DATABASE_URL` the app uses an embedded Postgres (PGlite) seeded with a fictional group,
 "Demo Financial Group" (labelled FICTIONAL DEMO DATA in the app). Demo accounts are
-`<first.last>@demofinancial.example` (see `lib/db/seed.ts`). On localhost they use the local default
+role-named, e.g. `group.cro@demofinancial.example` (full list in `lib/db/seed.ts` and below). On localhost they use the local default
 password in `lib/db/seed.ts`; a deployed demo (Vercel) uses `DEMO_PASSWORD`, and without it a random
 password nobody knows, so the public site never runs on a published password. Changing
 `DEMO_PASSWORD` and redeploying rotates the demo accounts' password on the next boot.
+
+| Email (@demofinancial.example) | Person | Role in the demo |
+|---|---|---|
+| admin | Olumide Bankole | Platform administrator (MFA required) |
+| group.cro | Adaeze Okafor | Group Chief Risk Officer (all entities) |
+| head.erm | Tunde Bakare | Head of Enterprise Risk, Demo Insurance |
+| group.cco | Ngozi Eze | Group CCO, Head of Enterprise Assurance, MLRO |
+| compliance.officer | Zainab Lawal | Compliance Officer, Demo Insurance |
+| pensions.risk | Hauwa Sani | Risk and Compliance, Demo Pensions (walled) |
+| asset.mgmt.risk | Kunle Ajayi | Head of Risk, Demo Asset Management |
+| mfb.compliance | Tobi Fashola | Risk and Compliance, Demo Microfinance Bank (walled) |
+| infra.bank.cco | Musa Garba | CCO, Demo Infrastructure Bank (walled) |
+| chief.auditor | Ibrahim Musa | Group Chief Internal Auditor (third line) |
+| investigator | Chidi Okonkwo | Head of Investigations |
+| hse.esg | Halima Bello | Group HSE and Sustainability Lead |
+| erm.committee.chair | Kemi Adebayo | Director, Chair of ERM Committee |
+| independent.director | Ifeoma Nnaji | Independent Non-Executive Director |
+| group.cfo | Bola Ogunleye | Group CFO (first line) |
+| group.cio | Segun Alabi | Group CIO (first line) |
+| head.claims | Funmi Adeyemi | Head of Claims, Demo Insurance |
+| head.underwriting | Emeka Nwosu | Head of Underwriting, Demo Insurance |
+| head.actuarial | Amaka Obi | Head of Actuarial, Demo Insurance |
+| risk.champion | Yusuf Danjuma | Branch manager and risk champion |
 
 The login page never lists accounts or passwords. `SHOW_DEMO_HINTS=true` only adds a note that trial
 details come from your Vernovi contact.
