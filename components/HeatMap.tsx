@@ -5,11 +5,15 @@ export interface HeatRisk { id: number; ref: string; title: string; l: number; i
 const IMPACT = ["Minor", "Moderate", "Major", "Severe", "Extreme"];
 const LIKELIHOOD = ["Rare", "Unlikely", "Possible", "Likely", "Almost certain"];
 
+// Crimson, yellow (dark text) and green; never orange. Bands are labelled in the legend.
+const BANDS = [
+  { min: 15, label: "Critical (15-25)", cls: "bg-bad text-white" },
+  { min: 10, label: "High (10-14)", cls: "bg-[#f6d3d8] text-crit" },
+  { min: 5, label: "Medium (5-9)", cls: "bg-yellow text-ink" },
+  { min: 0, label: "Low (1-4)", cls: "bg-good-soft text-good" },
+];
 function cellClass(s: number) {
-  if (s >= 15) return "bg-crit text-white";
-  if (s >= 10) return "bg-bad-soft text-bad";
-  if (s >= 5) return "bg-warn-soft text-warn";
-  return "bg-good-soft text-good";
+  return BANDS.find((b) => s >= b.min)!.cls;
 }
 
 export default function HeatMap({ risks, caption }: { risks: HeatRisk[]; caption: string }) {
@@ -59,7 +63,14 @@ export default function HeatMap({ risks, caption }: { risks: HeatRisk[]; caption
           </tr>
         </tbody>
       </table>
-      <figcaption className="mt-1 text-xs text-ink-3">Likelihood up, impact across. Numbers in cells are risk references.</figcaption>
+      <figcaption className="mt-2 text-xs text-ink-3">
+        <span className="flex flex-wrap gap-x-3 gap-y-1">
+          {BANDS.map((b) => (
+            <span key={b.label} className="inline-flex items-center gap-1"><span className={`inline-block h-3 w-3 rounded-sm ${b.cls}`} aria-hidden />{b.label}</span>
+          ))}
+        </span>
+        <span className="mt-1 block">Likelihood up, impact across. Numbers in cells are risk references.</span>
+      </figcaption>
     </figure>
   );
 }
