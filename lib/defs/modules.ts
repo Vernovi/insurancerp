@@ -1,4 +1,5 @@
 import type { FieldDef, TypeDef, WorkflowDef, StateDef } from "./types";
+import { LINES_OF_DEFENCE } from "./types";
 
 // ---------------------------------------------------------------------------
 // Shared option lists (editable by administrators once seeded)
@@ -12,6 +13,11 @@ export const RISK_CATEGORIES = [
   "Compliance and conduct",
   "Strategic",
   "ESG and climate",
+  // Group risk categories for a multi-entity financial group
+  "Intra-group contagion",
+  "Related-party exposure",
+  "Concentration in own funds",
+  "Shariah non-compliance",
 ];
 export const BUSINESS_LINES = [
   "Group",
@@ -21,12 +27,31 @@ export const BUSINESS_LINES = [
   "Engineering",
   "Oil and gas / energy",
   "General liability",
-  "Individual life",
-  "Group life",
-  "Health",
-  "Annuity",
   "Investments",
+  "Pension fund administration",
+  "Fund management",
+  "Stockbroking",
+  "Issuing house and advisory",
+  "Microfinance banking",
+  "Infrastructure finance",
 ];
+export const REGULATORS = ["NAICOM", "PenCom", "SEC", "NGX", "CBN", "NDPC", "NFIU", "FRC", "FIRS"];
+export const RETURN_TYPES = [
+  "ORSA return",
+  "ERM return",
+  "Claims return",
+  "Risk-based capital annual report",
+  "Quarterly returns",
+  "Audited financial statements",
+  "Interim financial statements",
+  "Fund returns",
+  "Prudential returns",
+  "AML/CFT return",
+  "Data protection compliance audit return",
+  "Corporate governance report",
+  "Other",
+];
+const RECURRENCE = ["One-off", "Monthly", "Quarterly", "Semi-annual", "Annual"];
 const SCORE = ["1", "2", "3", "4", "5"];
 const RATINGS = ["Low", "Medium", "High", "Critical"];
 const EFFECTIVENESS = ["Effective", "Partially effective", "Ineffective", "Not tested"];
@@ -189,6 +214,7 @@ const erm: TypeDef[] = [
       { key: "design_rating", label: "Design effectiveness", type: "select", options: EFFECTIVENESS, list: true },
       { key: "operating_rating", label: "Operating effectiveness", type: "select", options: EFFECTIVENESS, list: true },
       { key: "last_test", label: "Last tested", type: "date" },
+      { key: "line_of_defence", label: "Line of defence", type: "select", options: [...LINES_OF_DEFENCE], list: true, help: "Who operates the control: business (first line), risk and compliance (second), internal audit (third)" },
       { key: "key_control", label: "Key control", type: "checkbox" },
     ],
     workflow: simpleFlow(
@@ -209,11 +235,15 @@ const erm: TypeDef[] = [
     hook: "kri",
     fields: [
       { key: "definition", label: "Definition and formula", type: "textarea", required: true },
+      { key: "kri_kind", label: "Kind", type: "select", options: ["Standard", "Capital vs requirement"], help: "Capital vs requirement: enter readings as available capital in naira; status comes from cover against the requirement" },
       { key: "unit", label: "Unit", type: "text", list: true },
       { key: "frequency", label: "Frequency", type: "select", options: ["Monthly", "Quarterly", "Annual"] },
       { key: "direction", label: "Direction", type: "select", options: ["Higher is worse", "Lower is worse"], required: true },
-      { key: "amber_limit", label: "Amber threshold", type: "number", required: true },
-      { key: "red_limit", label: "Red threshold", type: "number", required: true },
+      { key: "amber_limit", label: "Amber threshold", type: "number", help: "Standard KRIs only" },
+      { key: "red_limit", label: "Red threshold", type: "number", help: "Standard KRIs only" },
+      { key: "requirement", label: "Capital requirement (NGN)", type: "currency", help: "Capital KRIs: the minimum capital requirement or RBC requirement, e.g. NGN 15bn for non-life under NIIRA 2025" },
+      { key: "buffer_pct", label: "Management buffer above requirement (%)", type: "number", min: 0, max: 200, help: "Capital KRIs: amber while cover is inside this buffer; red below 100%" },
+      { key: "latest_ratio", label: "Cover against requirement (%)", type: "computed", readOnly: true },
       { key: "data_source", label: "Data source", type: "text" },
       { key: "latest_value", label: "Latest value", type: "computed", readOnly: true, list: true },
       { key: "latest_date", label: "Latest reading", type: "computed", readOnly: true },
@@ -234,13 +264,24 @@ const erm: TypeDef[] = [
     editRoles: ["risk", "cro", "admin"],
     fields: [
       { key: "event_date", label: "Event date", type: "date", required: true, list: true },
+      { key: "discovery_date", label: "Discovered on", type: "date" },
       { key: "description", label: "What happened", type: "textarea", required: true },
+      { key: "event_source", label: "Source", type: "select", options: ["Internal loss", "External loss (industry or peer)", "Near miss"] },
       { key: "event_type", label: "Event type", type: "select", list: true, options: ["Internal fraud", "External fraud", "Employment practices", "Clients, products and business practices", "Damage to physical assets", "Business disruption and system failure", "Execution, delivery and process management"] },
       { key: "near_miss", label: "Near miss (no loss)", type: "checkbox" },
-      { key: "gross_loss", label: "Gross loss (NGN)", type: "currency" },
-      { key: "recoveries", label: "Recoveries (NGN)", type: "currency" },
-      { key: "net_loss", label: "Net loss (NGN)", type: "computed", readOnly: true, list: true },
+      { key: "currency", label: "Currency", type: "select", options: ["NGN", "USD"], section: "Amounts" },
+      { key: "fx_rate", label: "Exchange rate (NGN per USD on the event date)", type: "number", section: "Amounts", showIf: { field: "currency", in: ["USD"] } },
+      { key: "gross_loss", label: "Gross loss", type: "number", section: "Amounts", help: "In the currency above" },
+      { key: "insurance_recoveries", label: "Insurance recoveries", type: "number", section: "Amounts" },
+      { key: "recoveries", label: "Other recoveries", type: "number", section: "Amounts" },
+      { key: "net_loss", label: "Net loss (event currency)", type: "computed", readOnly: true, section: "Amounts" },
+      { key: "gross_loss_ngn", label: "Gross loss in naira", type: "currency", readOnly: true, section: "Amounts" },
+      { key: "net_loss_ngn", label: "Net loss in naira", type: "currency", readOnly: true, list: true, section: "Amounts" },
+      { key: "threshold_band", label: "Reporting threshold", type: "computed", readOnly: true, list: true, section: "Amounts", help: "Reportable from NGN 1m net; board-reportable from NGN 50m net" },
+      { key: "risk_ref", label: "Linked risk reference", type: "text", section: "Links", help: "For example RSK-0005; the loss is linked to the risk when saved" },
+      { key: "case_ref", label: "Linked case reference", type: "text", section: "Links" },
       { key: "root_cause", label: "Root cause", type: "textarea" },
+      { key: "lessons", label: "Lessons and control changes", type: "textarea" },
     ],
     workflow: simpleFlow(
       [s("reported", "Reported", "info"), s("validated", "Validated", "good"), s("closed", "Closed", "neutral", true)],
@@ -317,6 +358,115 @@ const erm: TypeDef[] = [
         { key: "retire", label: "Retire", from: "in_use", to: "retired", roles: ["risk", "cro"] },
       ],
     ),
+  },
+];
+
+
+// ---------------------------------------------------------------------------
+// PRUDENTIAL: ORSA, Risk Management Declaration, Financial Condition Report
+// (NAICOM Prudential Guidelines 2022 s.6.2.9, s.6.4, s.6.5)
+// ---------------------------------------------------------------------------
+const prudential: TypeDef[] = [
+  {
+    key: "orsa",
+    module: "prudential",
+    label: "ORSA",
+    plural: "ORSA workbooks",
+    prefix: "ORSA",
+    description: "Own risk and solvency assessment: at least annual, owned by the board, submitted within 60 days of year end. Compiling pulls the entity's register, appetite, KRIs and capital position.",
+    hook: "orsa",
+    dueField: "due_date",
+    createRoles: ["cro", "risk", "admin"],
+    editRoles: ["cro", "risk", "admin"],
+    fields: [
+      { key: "financial_year", label: "Financial year", type: "number", required: true, list: true },
+      { key: "year_end", label: "Year end", type: "date", required: true },
+      { key: "due_date", label: "Submission due (year end + 60 days)", type: "computed", readOnly: true, list: true },
+      { key: "board_owner", label: "Board owner", type: "user", help: "Director accountable for the ORSA, usually the ERM Committee chair" },
+      { key: "register_summary", label: "Risk profile (compiled from the register)", type: "textarea", readOnly: true, section: "Compiled from the register" },
+      { key: "capital_summary", label: "Capital position (compiled from capital KRIs)", type: "textarea", readOnly: true, section: "Compiled from the register" },
+      { key: "compiled_on", label: "Compiled on", type: "computed", readOnly: true, section: "Compiled from the register" },
+      { key: "stress_tests", label: "Stress and scenario tests", type: "textarea", section: "Assessment" },
+      { key: "forward_assessment", label: "Forward-looking solvency assessment (business plan period)", type: "textarea", section: "Assessment" },
+      { key: "conclusions", label: "Conclusions and management actions", type: "textarea", section: "Assessment" },
+      { key: "board_approval_date", label: "Board approval date", type: "date", section: "Approval and submission" },
+      { key: "submitted_date", label: "Submitted to NAICOM on", type: "date", section: "Approval and submission" },
+      { key: "reference", label: "Submission reference", type: "text", section: "Approval and submission" },
+      { key: "filing_status", label: "Filing status", type: "computed", readOnly: true, list: true, section: "Approval and submission" },
+    ],
+    workflow: {
+      initial: "draft",
+      states: [s("draft", "Draft"), s("compiled", "Compiled", "info"), s("board_review", "With the board", "warn"), s("approved", "Board approved", "good"), s("submitted", "Submitted", "good", true)],
+      transitions: [
+        { key: "compile", label: "Compile from the register", from: ["draft", "compiled"], to: "compiled", roles: ["risk", "cro"] },
+        { key: "to_board", label: "Send to the board", from: ["compiled"], to: "board_review", roles: ["cro"], requires: ["stress_tests", "conclusions"] },
+        { key: "approve", label: "Approve (board)", from: ["board_review"], to: "approved", roles: ["board"], strictRoles: true, fourEyes: true, requires: ["board_approval_date"] },
+        { key: "return", label: "Return to management", from: ["board_review"], to: "compiled", roles: ["board"], strictRoles: true, commentRequired: true },
+        { key: "submit", label: "Record submission", from: ["approved"], to: "submitted", roles: ["cro", "risk", "compliance"], requires: ["submitted_date", "reference"] },
+      ],
+    },
+  },
+  {
+    key: "rm_declaration",
+    module: "prudential",
+    label: "Risk Management Declaration",
+    plural: "Risk Management Declarations",
+    prefix: "RMD",
+    description: "Annual board declaration on the risk management framework, signed by two different directors.",
+    hook: "rm_declaration",
+    dueField: "due_date",
+    createRoles: ["cro", "risk", "compliance", "admin"],
+    editRoles: ["cro", "risk", "compliance", "admin"],
+    fields: [
+      { key: "financial_year", label: "Financial year", type: "number", required: true, list: true },
+      { key: "due_date", label: "Due", type: "date", list: true },
+      { key: "statement", label: "Declaration", type: "textarea", required: true, help: "What the directors confirm about the risk management framework, appetite, systems and controls" },
+      { key: "basis", label: "Evidence relied on", type: "textarea", help: "For example the ORSA, risk register, appetite monitoring, internal audit and independent framework review" },
+      { key: "director_1_by", label: "First director", type: "user", readOnly: true, section: "Signatures" },
+      { key: "director_1_on", label: "First signed on", type: "date", readOnly: true, section: "Signatures" },
+      { key: "director_2_by", label: "Second director", type: "user", readOnly: true, section: "Signatures" },
+      { key: "director_2_on", label: "Second signed on", type: "date", readOnly: true, section: "Signatures" },
+      { key: "submitted_date", label: "Submitted to NAICOM on", type: "date", section: "Signatures" },
+      { key: "reference", label: "Submission reference", type: "text", section: "Signatures" },
+    ],
+    workflow: {
+      initial: "draft",
+      states: [s("draft", "Awaiting signatures"), s("first_signed", "One director signed", "warn"), s("signed", "Signed by two directors", "good"), s("submitted", "Submitted", "good", true)],
+      transitions: [
+        { key: "sign1", label: "Sign as first director", from: ["draft"], to: "first_signed", roles: ["board"], strictRoles: true, requires: ["statement"], stamp: { by: "director_1_by", on: "director_1_on" } },
+        { key: "sign2", label: "Sign as second director", from: ["first_signed"], to: "signed", roles: ["board"], strictRoles: true, distinctFrom: ["director_1_by"], stamp: { by: "director_2_by", on: "director_2_on" } },
+        { key: "submit", label: "Record submission", from: ["signed"], to: "submitted", roles: ["cro", "compliance"], requires: ["submitted_date", "reference"] },
+      ],
+    },
+  },
+  {
+    key: "fcr",
+    module: "prudential",
+    label: "Financial Condition Report",
+    plural: "Financial Condition Reports",
+    prefix: "FCR",
+    description: "Prepared by an independent actuary; published within 14 days of the report date.",
+    hook: "fcr",
+    dueField: "publish_due",
+    createRoles: ["cro", "risk", "admin"],
+    editRoles: ["cro", "risk", "admin"],
+    fields: [
+      { key: "financial_year", label: "Financial year", type: "number", required: true, list: true },
+      { key: "actuary_firm", label: "Independent actuary", type: "text", required: true, list: true },
+      { key: "actuary_independent", label: "Actuary confirmed independent of the company and its auditors", type: "checkbox" },
+      { key: "report_date", label: "Report date", type: "date" },
+      { key: "publish_due", label: "Publication due (report date + 14 days)", type: "computed", readOnly: true, list: true },
+      { key: "published_date", label: "Published on", type: "date" },
+      { key: "key_findings", label: "Key findings", type: "textarea" },
+    ],
+    workflow: {
+      initial: "commissioned",
+      states: [s("commissioned", "Commissioned"), s("received", "Report received", "info"), s("published", "Published", "good", true)],
+      transitions: [
+        { key: "receive", label: "Record report received", from: ["commissioned"], to: "received", requires: ["report_date", "actuary_independent"] },
+        { key: "publish", label: "Record publication", from: ["received"], to: "published", requires: ["published_date"] },
+      ],
+    },
   },
 ];
 
@@ -447,7 +597,7 @@ const compliance: TypeDef[] = [
     fields: [
       { key: "clause_ref", label: "Clause reference", type: "text", list: true },
       { key: "requirement", label: "Requirement in plain English", type: "textarea", required: true },
-      { key: "applicability", label: "Applies to", type: "select", options: ["All entities", "Non-life", "Life", "Group", "Listed entity"] },
+      { key: "applicability", label: "Applies to", type: "select", options: ["All entities", "Insurer", "Pension fund administrator", "Fund manager", "Broker-dealer", "Bank", "Listed entity", "Group"] },
       { key: "frequency", label: "Frequency", type: "select", options: ["Ongoing", "Annual", "Quarterly", "Monthly", "Event-driven"] },
       { key: "penalty", label: "Consequence of breach", type: "text" },
       { key: "compliance_status", label: "Compliance status", type: "select", options: ["Compliant", "Partially compliant", "Non-compliant", "Not assessed"], list: true },
@@ -520,7 +670,8 @@ const compliance: TypeDef[] = [
     prefix: "RCH",
     editRoles: ["compliance", "admin"],
     fields: [
-      { key: "source", label: "Source", type: "text", list: true, help: "For example NAICOM circular reference" },
+      { key: "regulator", label: "Regulator", type: "select", options: REGULATORS, list: true },
+      { key: "source", label: "Circular or reference", type: "text", list: true, help: "For example NAICOM circular reference" },
       { key: "issued_date", label: "Issued", type: "date" },
       { key: "effective_date", label: "Effective", type: "date", list: true },
       { key: "summary", label: "Summary", type: "textarea", required: true },
@@ -544,16 +695,23 @@ const compliance: TypeDef[] = [
     label: "Regulatory return",
     plural: "Returns calendar",
     prefix: "RET",
+    description: "Every filing per entity and regulator, with owners, reminders before the due date and escalation the day it is missed. Filing a recurring return schedules the next one.",
     dueField: "due_date",
+    hook: "recurring_filing",
     editRoles: ["compliance", "admin"],
     fields: [
-      { key: "regulator", label: "Regulator", type: "select", options: ["NAICOM", "NFIU", "NDPC", "FRC", "SEC", "NGX", "FIRS", "CBN"], list: true, required: true },
-      { key: "frequency", label: "Frequency", type: "select", options: ["Annual", "Quarterly", "Monthly", "Event-driven"] },
+      { key: "regulator", label: "Regulator", type: "select", options: REGULATORS, list: true, required: true },
+      { key: "return_type", label: "Return", type: "select", options: RETURN_TYPES, required: true },
+      { key: "period", label: "Period covered", type: "text", list: true, help: "For example Q3 2026 or FY2026" },
+      { key: "recurrence", label: "Recurrence", type: "select", options: RECURRENCE, help: "Filing a recurring return creates the next period's entry" },
       { key: "due_date", label: "Due date", type: "date", required: true, list: true },
+      { key: "legal_basis", label: "Legal basis", type: "text", help: "Section, guideline or circular that sets the deadline" },
+      { key: "reminder_days", label: "First reminder (days before due)", type: "number", min: 1, max: 90, help: "Reminders also go 7 days and 1 day before, and Compliance is alerted the day after it is missed" },
       { key: "preparer", label: "Preparer", type: "user" },
       { key: "reviewer", label: "Reviewer", type: "user" },
       { key: "submitted_date", label: "Submitted on", type: "date" },
       { key: "reference", label: "Submission reference", type: "text" },
+      { key: "filing_status", label: "Filing status", type: "computed", readOnly: true, list: true },
     ],
     workflow: {
       initial: "scheduled",
@@ -675,7 +833,7 @@ const actions: TypeDef[] = [
     prefix: "MTG",
     createRoles: ["board", "admin", "compliance", "cro"],
     fields: [
-      { key: "committee", label: "Committee", type: "select", options: ["Board of Directors", "Board Audit Committee", "Board Risk Management Committee", "Board Investment Committee", "Board Nomination and Governance Committee", "Executive Committee"], list: true, required: true },
+      { key: "committee", label: "Committee", type: "select", options: ["Board of Directors", "ERM Committee", "Board Audit Committee", "Statutory Audit Committee", "Board Compliance Committee", "Board Finance, Investment and General Purpose Committee", "Board Nomination and Governance Committee", "Fund Investment Committee", "Shariah Advisory Committee", "Executive Committee", "Group Executive Committee"], list: true, required: true },
       { key: "meeting_date", label: "Date", type: "date", list: true, required: true },
       { key: "quorate", label: "Quorum present", type: "checkbox" },
       { key: "attendees", label: "Attendance", type: "textarea" },
@@ -745,6 +903,7 @@ const declarations: TypeDef[] = [
 // ---------------------------------------------------------------------------
 export const CASE_TYPES = [
   "Operational incident",
+  "Claim awaiting settlement or decision",
   "Customer complaint",
   "Suspected claims fraud",
   "Internal fraud or misconduct",
@@ -768,12 +927,13 @@ const cases: TypeDef[] = [
     confidential: { roles: ["investigator", "mlro"], whenField: "case_type", whenIn: WALLED_CASE_TYPES },
     fields: [
       { key: "case_type", label: "Case type", type: "select", options: CASE_TYPES, required: true, list: true },
-      { key: "channel", label: "How it was reported", type: "select", options: ["Staff form", "Anonymous portal", "Email", "Hotline", "Core system", "NAICOM referral", "Broker"] },
+      { key: "channel", label: "How it was reported", type: "select", options: ["Staff form", "Anonymous portal", "Email", "Hotline", "Core system", "Regulator referral", "Broker"] },
       { key: "business_line", label: "Business line", type: "select", options: BUSINESS_LINES },
       { key: "reported_date", label: "Reported on", type: "date", required: true },
       { key: "description", label: "What happened", type: "textarea", required: true },
       { key: "severity", label: "Severity", type: "select", options: RATINGS, list: true },
       { key: "clock_due", label: "Response or notification due", type: "computed", readOnly: true, list: true },
+      { key: "clock_basis", label: "Clock basis", type: "computed", readOnly: true },
       { key: "subjects", label: "Parties involved", type: "textarea", section: "Investigation" },
       { key: "claim_ref", label: "Related claim or policy number", type: "text", section: "Investigation" },
       { key: "amount_at_risk", label: "Amount at risk (NGN)", type: "currency", section: "Financials" },
@@ -910,7 +1070,7 @@ const thirdparty: TypeDef[] = [
     dueField: "next_assessment",
     editRoles: ["risk", "compliance", "admin"],
     fields: [
-      { key: "tp_type", label: "Type", type: "select", required: true, list: true, options: ["Reinsurer", "Broker", "Agent", "Bancassurance partner", "TPA / HMO", "Hospital", "Loss adjuster", "Surveyor", "Repair workshop", "IT or cloud provider", "Outsourced service provider", "Investment manager", "Custodian"] },
+      { key: "tp_type", label: "Type", type: "select", required: true, list: true, options: ["Reinsurer", "Broker", "Agent", "Bancassurance partner", "TPA / HMO", "Hospital", "Loss adjuster", "Surveyor", "Repair workshop", "IT or cloud provider", "Outsourced service provider", "Investment manager", "Custodian", "Fund trustee", "Intra-group service provider"] },
       { key: "rc_number", label: "RC number", type: "text" },
       { key: "services", label: "Services provided", type: "textarea" },
       { key: "business_lines", label: "Business lines served", type: "multiselect", options: BUSINESS_LINES },
@@ -967,6 +1127,35 @@ const thirdparty: TypeDef[] = [
       transitions: [
         { key: "submit", label: "Submit for sign-off", from: ["in_progress"], to: "review", requires: ["overall"] },
         { key: "approve", label: "Sign off", from: ["review"], to: "completed", roles: ["risk", "compliance", "cro"], ownerAllowed: false, fourEyes: true },
+      ],
+    },
+  },
+  {
+    key: "outsourcing_notice",
+    module: "thirdparty",
+    label: "Outsourcing notification",
+    plural: "Outsourcing notifications",
+    prefix: "OSN",
+    description: "Notify the regulator within 30 days of a material outsourcing arrangement, then report on it every six months (NAICOM Prudential Guidelines 2022 s.9.4.1). Filing one schedules the next report.",
+    hook: "recurring_filing",
+    dueField: "due_date",
+    editRoles: ["compliance", "risk", "admin"],
+    fields: [
+      { key: "notice_type", label: "Notification", type: "select", options: ["Initial notification (30 days)", "Six-monthly report"], required: true, list: true },
+      { key: "regulator", label: "Regulator", type: "select", options: REGULATORS, required: true, list: true },
+      { key: "arrangement_date", label: "Arrangement start date", type: "date", help: "Initial notification falls due 30 days after this date" },
+      { key: "due_date", label: "Due date", type: "date", list: true, help: "Set automatically for initial notifications" },
+      { key: "recurrence", label: "Recurrence", type: "select", options: ["Semi-annual", "One-off"] },
+      { key: "submitted_date", label: "Submitted on", type: "date" },
+      { key: "reference", label: "Submission reference", type: "text" },
+      { key: "filing_status", label: "Filing status", type: "computed", readOnly: true, list: true },
+    ],
+    workflow: {
+      initial: "scheduled",
+      states: [s("scheduled", "Scheduled"), s("in_preparation", "In preparation", "info"), s("submitted", "Submitted", "good", true)],
+      transitions: [
+        { key: "prepare", label: "Start preparation", from: ["scheduled"], to: "in_preparation" },
+        { key: "submit", label: "Record submission", from: ["in_preparation"], to: "submitted", requires: ["submitted_date", "reference"] },
       ],
     },
   },
@@ -1135,6 +1324,7 @@ const bcm: TypeDef[] = [
 
 export const DEFAULT_TYPES: TypeDef[] = [
   ...erm,
+  ...prudential,
   ...policy,
   ...compliance,
   ...actions,

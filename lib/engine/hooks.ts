@@ -10,10 +10,18 @@ import {
   addMonths,
   appetiteStatus,
   auditPriority,
+  capitalCover,
+  CASE_CLOCK_BASIS,
   caseClock,
   declarationTriage,
+  fcrPublishDue,
+  filingStatus,
   kriStatus,
+  lossBand,
+  lossFigures,
+  nextDue,
   num,
+  orsaDue,
   rating,
   reviewDays,
   score,
@@ -31,6 +39,7 @@ export interface HookRecord {
   status: string;
   ownerId: number | null;
   orgUnitId: number | null;
+  entityId: number | null;
   createdBy: number | null;
   data: Record<string, unknown>;
 }
@@ -39,7 +48,7 @@ export interface HookCtx {
   db: DB;
   actorId: number | null;
   /** Create a record as the system, linked to `linkTo` when given. */
-  createRecord(typeKey: string, input: { title: string; ownerId: number | null; orgUnitId?: number | null; data: Record<string, unknown>; status?: string }, linkTo?: { id: number; kind: string }): Promise<HookRecord>;
+  createRecord(typeKey: string, input: { title: string; ownerId: number | null; orgUnitId?: number | null; entityId?: number | null; data: Record<string, unknown>; status?: string }, linkTo?: { id: number; kind: string }): Promise<HookRecord>;
   /** Update data fields on another record (re-runs compute, writes a version). */
   patchRecord(id: number, patch: Record<string, unknown>, note: string): Promise<void>;
   linked(id: number, typeKey?: string): Promise<HookRecord[]>;
@@ -57,13 +66,40 @@ const RBC_BY_CATEGORY: Record<string, string> = {
   "Compliance and conduct": "Operational",
   Strategic: "Not applicable",
   "ESG and climate": "Insurance",
+  "Intra-group contagion": "Operational",
+  "Related-party exposure": "Credit",
+  "Concentration in own funds": "Market",
+  "Shariah non-compliance": "Operational",
 };
+
+/** Roll a period label forward: "Q4 2026" -> "Q1 2027", "FY2025" -> "FY2026", "H1 2026" -> "H2 2026", "Sep 2026" -> "Oct 2026". */
+export function rollPeriod(period: unknown, recurrence: unknown): string | null {
+  const p = String(period ?? "").trim();
+  let m = /^Q([1-4]) (\d{4})$/.exec(p);
+  if (m) return Number(m[1]) === 4 ? `Q1 ${Number(m[2]) + 1}` : `Q${Number(m[1]) + 1} ${m[2]}`;
+  m = /^FY ?(\d{4})$/.exec(p);
+  if (m) return `FY${Number(m[1]) + 1}`;
+  m = /^H([12]) (\d{4})$/.exec(p);
+  if (m) return m[1] === "1" ? `H2 ${m[2]}` : `H1 ${Number(m[2]) + 1}`;
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  m = /^([A-Z][a-z]{2}) (\d{4})$/.exec(p);
+  if (m && recurrence === "Monthly" && months.includes(m[1])) {
+    const i = months.indexOf(m[1]);
+    return i === 11 ? `Jan ${Number(m[2]) + 1}` : `${months[i + 1]} ${m[2]}`;
+  }
+  return null;
+}
+
+/** Pick the appetite that applies to a risk: the entity's own approved appetite, else the group appetite. */
+export function pickAppetite<T extends { entityId: number | null }>(apps: T[], entityId: number | null, groupLevel: (a: T) => boolean): T | null {
+  return apps.find((a) => entityId !== null && a.entityId === entityId) ?? apps.find(groupLevel) ?? null;
+}
 
 /** Compute derived fields before save. Returns the new data and the record's due date. */
 export async function compute(
   def: TypeDef,
   data: Record<string, unknown>,
-  ctx: { db: DB; createdAt?: Date },
+  ctx: { db: DB; createdAt?: Date; entityId?: number | null },
 ): Promise<{ data: Record<string, unknown>; dueDate: string | null }> {
   const d = { ...data };
   let due: string | null = def.dueField ? ((d[def.dueField] as string) ?? null) : null;
@@ -77,13 +113,15 @@ export async function compute(
       d.rating = r;
       let threshold: number | null = null;
       if (d.category) {
-        const [a] = await ctx.db
+        const apps = await ctx.db
           .select()
           .from(schema.records)
           .where(and(eq(schema.records.typeKey, "appetite"), eq(schema.records.status, "approved"), sql`${schema.records.data}->>'category' = ${String(d.category)}`))
-          .orderBy(desc(schema.records.updatedAt))
-          .limit(1);
+          .orderBy(desc(schema.records.updatedAt));
+        const groupIds = new Set((await ctx.db.select({ id: schema.entities.id }).from(schema.entities).where(eq(schema.entities.kind, "group"))).map((x) => x.id));
+        const a = pickAppetite(apps, ctx.entityId ?? null, (x) => x.entityId === null || groupIds.has(x.entityId));
         threshold = a ? num((a.data as Record<string, unknown>).threshold) : null;
+        d.appetite_source = a ? (a.entityId !== null && a.entityId === (ctx.entityId ?? null) && !groupIds.has(a.entityId) ? "Entity appetite" : "Group appetite") : null;
       }
       d.appetite_threshold = threshold;
       d.appetite_status = appetiteStatus(d.residual_score as number | null, threshold);
@@ -100,7 +138,11 @@ export async function compute(
       const last = sorted.at(-1);
       d.latest_value = last ? last.value : null;
       d.latest_date = last ? last.date : null;
-      if (def.hook === "kri") {
+      if (def.hook === "kri" && d.kri_kind === "Capital vs requirement") {
+        const c = capitalCover(last ? last.value : null, num(d.requirement), num(d.buffer_pct) ?? 20);
+        d.latest_ratio = c.ratio;
+        d.kri_status = c.status;
+      } else if (def.hook === "kri") {
         d.kri_status = kriStatus(last ? last.value : null, num(d.amber_limit), num(d.red_limit), d.direction as string);
       } else {
         const f = num(d.emission_factor);
@@ -109,9 +151,30 @@ export async function compute(
       break;
     }
     case "loss": {
-      const g = num(d.gross_loss) ?? 0;
-      const rec = num(d.recoveries) ?? 0;
-      d.net_loss = d.near_miss ? 0 : g - rec;
+      if (!d.currency) d.currency = "NGN";
+      if (d.event_source === "Near miss") d.near_miss = true;
+      const f = lossFigures(d);
+      d.net_loss = f.net;
+      d.net_loss_ngn = f.netNgn;
+      d.gross_loss_ngn = f.grossNgn;
+      d.threshold_band = lossBand(f.netNgn, d.near_miss === true);
+      break;
+    }
+    case "recurring_filing": {
+      if (!d.due_date && d.arrangement_date && String(d.notice_type ?? "").startsWith("Initial")) d.due_date = addDays(String(d.arrangement_date), 30);
+      d.filing_status = filingStatus((d.due_date as string) ?? null, (d.submitted_date as string) || null);
+      due = (d.due_date as string) ?? null;
+      break;
+    }
+    case "orsa": {
+      d.due_date = orsaDue(d.year_end);
+      d.filing_status = filingStatus((d.due_date as string) ?? null, (d.submitted_date as string) || null);
+      due = (d.due_date as string) ?? null;
+      break;
+    }
+    case "fcr": {
+      d.publish_due = fcrPublishDue(d.report_date);
+      due = (d.publish_due as string) ?? null;
       break;
     }
     case "action": {
@@ -126,6 +189,7 @@ export async function compute(
     }
     case "case": {
       d.clock_due = caseClock(d.case_type, d.reported_date);
+      d.clock_basis = CASE_CLOCK_BASIS[String(d.case_type)] ?? null;
       if (!d.severity) d.severity = severityFromAmount(num(d.amount_at_risk));
       due = (d.clock_due as string) ?? null;
       break;
@@ -152,9 +216,15 @@ export function onTransition(
   key: string,
   to: string,
   data: Record<string, unknown>,
+  actorId: number | null = null,
 ): { data: Record<string, unknown>; to: string } {
   const d = { ...data };
   let target = to;
+  const t = def.workflow.transitions.find((x) => x.key === key);
+  if (t?.stamp) {
+    d[t.stamp.by] = actorId;
+    d[t.stamp.on] = today();
+  }
   if (def.hook === "risk" && key === "review") d.last_review = today();
   if (def.hook === "attestation" && key === "attest") {
     d.attested_on = today();
@@ -199,6 +269,7 @@ export async function after(
             title: `Appetite breach: ${rec.title}`,
             ownerId: rec.ownerId,
             orgUnitId: rec.orgUnitId,
+            entityId: rec.entityId,
             data: {
               source: "Appetite breach",
               description: `Residual score ${d.residual_score} exceeds the appetite threshold of ${d.appetite_threshold} for ${d.category}. Justify, treat, or request formal risk acceptance.`,
@@ -256,6 +327,7 @@ export async function after(
             {
               title: `Control failure: ${rec.title}`,
               ownerId: controls[0]?.ownerId ?? rec.ownerId,
+              entityId: rec.entityId,
               data: { source: "Compliance test", rating: "High", condition: String(d.evidence ?? "Control test failed."), criteria: String(d.procedure ?? "") },
               status: "open",
             },
@@ -267,6 +339,7 @@ export async function after(
             {
               title: `Remediate: ${rec.title}`,
               ownerId: controls[0]?.ownerId ?? rec.ownerId,
+              entityId: rec.entityId,
               data: { source: "Control test", description: "Fix the control failure and evidence the fix.", priority: "High", due_date: addDays(today(), 30) },
             },
             { id: finding.id, kind: "remediates" },
@@ -292,6 +365,97 @@ export async function after(
       }
       break;
     }
+    case "recurring_filing": {
+      if (event === "transition" && rec.status === "submitted") {
+        const dueDate = String(d.due_date ?? "");
+        if (d.submitted_date && dueDate && String(d.submitted_date) > dueDate) {
+          await ctx.notifyRoles(["compliance", "cro"], rec.id, `${rec.ref} ${rec.title} was filed after its due date (${dueDate}). Record the reason.`);
+        }
+        const isInitial = String(d.notice_type ?? "").startsWith("Initial");
+        const rec2 = isInitial ? "Semi-annual" : d.recurrence;
+        const nd = dueDate ? nextDue(dueDate, rec2) : null;
+        if (nd) {
+          const period = rollPeriod(d.period, d.recurrence);
+          const title = period && d.period ? rec.title.replace(String(d.period), period) : rec.title.replace(/^Initial notification/i, "Six-monthly report");
+          const next = await ctx.createRecord(
+            def.key,
+            {
+              title,
+              ownerId: rec.ownerId,
+              orgUnitId: rec.orgUnitId,
+              entityId: rec.entityId,
+              data: {
+                ...d,
+                period: period ?? d.period ?? null,
+                notice_type: isInitial ? "Six-monthly report" : d.notice_type,
+                recurrence: isInitial ? "Semi-annual" : d.recurrence,
+                due_date: nd,
+                submitted_date: null,
+                reference: null,
+                filing_status: null,
+              },
+              status: "scheduled",
+            },
+            { id: rec.id, kind: "next-period" },
+          );
+          await ctx.notifyUsers([rec.ownerId], next.id, `${next.ref} scheduled: ${next.title}, due ${nd}.`);
+        }
+      }
+      break;
+    }
+    case "orsa": {
+      if (event === "transition" && transitionKey === "compile") {
+        const all = await ctx.db.select().from(schema.records).where(sql`${schema.records.typeKey} in ('risk','kri','appetite','loss_event')`);
+        const scoped = all.filter((r) => rec.entityId === null || r.entityId === rec.entityId || (r.typeKey === "appetite" && r.entityId === null));
+        const risks = scoped.filter((r) => r.typeKey === "risk" && r.status === "active");
+        const dd = (r: (typeof all)[number]) => r.data as Record<string, unknown>;
+        const byCat = new Map<string, { n: number; out: number; top: number }>();
+        for (const r of risks) {
+          const c = String(dd(r).category ?? "Uncategorised");
+          const e = byCat.get(c) ?? { n: 0, out: 0, top: 0 };
+          e.n++;
+          if (dd(r).appetite_status === "Outside appetite") e.out++;
+          e.top = Math.max(e.top, Number(dd(r).residual_score ?? 0));
+          byCat.set(c, e);
+        }
+        const kris = scoped.filter((r) => r.typeKey === "kri" && r.status === "active");
+        const red = kris.filter((k) => dd(k).kri_status === "Red");
+        const losses = scoped.filter((r) => r.typeKey === "loss_event").reduce((n, r) => n + (Number(dd(r).net_loss_ngn) || 0), 0);
+        const lines = [
+          `${risks.length} active risks; ${risks.filter((r) => dd(r).appetite_status === "Outside appetite").length} outside appetite.`,
+          ...[...byCat.entries()].map(([c, e]) => `${c}: ${e.n} risks, highest residual ${e.top}${e.out ? `, ${e.out} outside appetite` : ""}.`),
+          `${kris.length} KRIs monitored; ${red.length} red${red.length ? `: ${red.map((k) => k.title).join("; ")}` : ""}.`,
+          `Net operational losses recorded: NGN ${Math.round(losses / 1e6).toLocaleString("en-GB")}m.`,
+        ];
+        const capital = kris.filter((k) => dd(k).kri_kind === "Capital vs requirement");
+        const capLines = capital.length
+          ? capital.map((k) => `${k.title}: latest NGN ${(Number(dd(k).latest_value) / 1e9).toFixed(1)}bn against a requirement of NGN ${(Number(dd(k).requirement) / 1e9).toFixed(1)}bn, cover ${dd(k).latest_ratio}% (${dd(k).kri_status}), as at ${dd(k).latest_date}.`)
+          : ["No capital KRI recorded for this entity. Add a 'Capital vs requirement' KRI."];
+        await ctx.patchRecord(rec.id, { register_summary: lines.join("\n"), capital_summary: capLines.join("\n"), compiled_on: today() }, "Compiled from the register");
+      }
+      if (event === "transition" && rec.status === "board_review") {
+        await ctx.notifyRoles(["board"], rec.id, `${rec.ref} ${rec.title} is with the board for approval. Submission due ${d.due_date}.`);
+      }
+      break;
+    }
+    case "rm_declaration": {
+      if (event === "transition" && rec.status === "first_signed") {
+        await ctx.notifyRoles(["board"], rec.id, `${rec.ref} has one director's signature and needs a second, different director.`);
+      }
+      break;
+    }
+    case "loss": {
+      for (const [field, type, kind] of [["risk_ref", "risk", "materialised"], ["case_ref", "case", "caused-by"]] as const) {
+        const ref = String(d[field] ?? "").trim().toUpperCase();
+        if (!ref || ref === String(prev?.data[field] ?? "").trim().toUpperCase()) continue;
+        const [target] = await ctx.db.select({ id: schema.records.id, typeKey: schema.records.typeKey }).from(schema.records).where(eq(schema.records.ref, ref));
+        if (target && target.typeKey === type) await ctx.createLink(target.id, rec.id, kind);
+      }
+      if (d.threshold_band === "Board-reportable" && prev?.data.threshold_band !== "Board-reportable") {
+        await ctx.notifyRoles(["cro"], rec.id, `${rec.ref} is a board-reportable loss (net NGN ${Math.round(Number(d.net_loss_ngn) / 1e6)}m).`);
+      }
+      break;
+    }
     case "case": {
       if (event === "create") {
         const ct = String(d.case_type);
@@ -306,12 +470,15 @@ export async function after(
             {
               title: `Loss from ${rec.ref}: ${rec.title}`,
               ownerId: rec.ownerId,
+              entityId: rec.entityId,
               data: {
                 event_date: d.reported_date ?? today(),
                 description: String(d.findings ?? d.description ?? ""),
                 event_type: ["Suspected claims fraud"].includes(String(d.case_type)) ? "External fraud" : d.case_type === "Internal fraud or misconduct" ? "Internal fraud" : "Execution, delivery and process management",
                 gross_loss: loss,
                 recoveries: 0,
+                currency: "NGN",
+                event_source: "Internal loss",
                 root_cause: d.root_cause ?? null,
               },
               status: "reported",
@@ -344,6 +511,7 @@ export async function after(
             {
               title: `${svc ? svc.title : rec.title} cannot recover within impact tolerance`,
               ownerId: svc?.ownerId ?? rec.ownerId,
+              entityId: svc?.entityId ?? rec.entityId,
               data: {
                 description: `Exercise ${rec.ref} (${d.scenario}) took ${d.recovery_hours} hours to recover${svc ? `, beyond the ${svc.data.tolerance_hours}-hour tolerance` : ""}.`,
                 category: "Operational risk",

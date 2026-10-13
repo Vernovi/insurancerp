@@ -98,18 +98,33 @@ export function addMonths(isoDate: string, months: number): string {
 
 /**
  * Regulatory and internal response clocks per case type, in days from the reported date.
- * These are configurable defaults; confirm each against current NAICOM, NFIU and NDPC rules with the client.
+ * CASE_CLOCK_BASIS records where each value comes from; "Internal" values are service standards
+ * the client sets, not regulatory deadlines.
  */
 export const CASE_CLOCK_DAYS: Record<string, number> = {
-  "Data protection breach": 3, // NDPA: notify NDPC within 72 hours where required
-  "Customer complaint": 14,
+  "Claim awaiting settlement or decision": 60, // NIIRA 2025 s.210
+  "Customer complaint": 60, // claims complaints follow NIIRA 2025 s.210
+  "Data protection breach": 3, // NDPA 2023 s.40: notify NDPC within 72 hours where required
   "Whistleblowing report": 7, // acknowledge reporter
-  "AML/CFT suspicious activity": 1, // file STR promptly; confirm NFIU deadline
+  "AML/CFT suspicious activity": 1, // STR to NFIU; 24 hours unverified against primary text
   "Regulatory breach": 5,
   "Suspected claims fraud": 30,
   "Internal fraud or misconduct": 30,
   "Operational incident": 10,
   "HSE incident": 2,
+};
+
+export const CASE_CLOCK_BASIS: Record<string, string> = {
+  "Claim awaiting settlement or decision": "NIIRA 2025 s.210: admitted claims settled, special-risk claims admitted or denied, and declines given in writing within 60 days",
+  "Customer complaint": "NIIRA 2025 s.210 60-day claims clock for claims-related complaints; set a shorter internal acknowledgement standard if wanted",
+  "Data protection breach": "NDPA 2023 s.40: 72 hours to notify the NDPC where required",
+  "Whistleblowing report": "Internal standard: acknowledge the reporter within 7 days",
+  "AML/CFT suspicious activity": "NFIU suspicious transaction report; 24 hours to be confirmed against the regulations",
+  "Regulatory breach": "Internal standard: 5 days to assess and decide on notification",
+  "Suspected claims fraud": "Internal standard",
+  "Internal fraud or misconduct": "Internal standard",
+  "Operational incident": "Internal standard",
+  "HSE incident": "Internal standard",
 };
 
 export function caseClock(caseType: unknown, reportedDate: unknown): string | null {
@@ -182,13 +197,19 @@ export function checkTransition(
   const isOwner = rec.ownerId === actor.id;
   const isCreator = rec.createdBy === actor.id;
   const isAdmin = actor.roles.includes("admin");
-  const roleMatch = isAdmin || (t.roles ?? []).some((r) => actor.roles.includes(r));
+  const roleMatch = (isAdmin && !t.strictRoles) || (t.roles ?? []).some((r) => actor.roles.includes(r));
   if (t.ownerAllowed === false && isOwner) return `The record owner cannot "${t.label}"; someone independent must do it.`;
   if (t.fourEyes && isCreator) return `Four-eyes rule: the person who raised this record cannot "${t.label}".`;
   if (t.roles && t.roles.length > 0) {
+    if (t.strictRoles && !roleMatch) return `Only these roles can "${t.label}": ${t.roles.join(", ")}.`;
     if (!roleMatch && !(isOwner && t.ownerAllowed !== false)) return `Only these roles can "${t.label}": ${t.roles.join(", ")}.`;
   } else if (!(isOwner || isCreator || canEdit || isAdmin)) {
     return `Only the owner or an editor can "${t.label}".`;
+  }
+  for (const f of t.distinctFrom ?? []) {
+    if (rec.data[f] !== null && rec.data[f] !== undefined && Number(rec.data[f]) === actor.id) {
+      return `"${t.label}" needs a different person from the one who already signed.`;
+    }
   }
   if (t.commentRequired && !(comment && comment.trim())) return `Add a comment to "${t.label}".`;
   for (const f of t.requires ?? []) {
@@ -256,4 +277,121 @@ export function fieldVisible(f: FieldDef, data: Record<string, unknown>): boolea
   const v = data[f.showIf.field];
   const norm = v === undefined || v === null ? (f.showIf.in.includes(false) ? false : v) : v;
   return f.showIf.in.includes(norm as string | boolean);
+}
+
+// ---------------------------------------------------------------------------
+// Capital, claims ageing, losses, returns and reminders
+// ---------------------------------------------------------------------------
+
+/** Non-life minimum capital under NIIRA 2025 (NAICOM recapitalisation circular). */
+export const NON_LIFE_MCR_NGN = 15_000_000_000;
+
+/** Capital against a minimum or risk-based requirement. Red below 100%, amber inside the buffer. */
+export function capitalCover(capital: number | null, requirement: number | null, bufferPct = 20): { ratio: number | null; status: KriStatus } {
+  if (capital === null || requirement === null || requirement <= 0) return { ratio: null, status: "No data" };
+  const ratio = Math.round((capital / requirement) * 1000) / 10;
+  if (ratio < 100) return { ratio, status: "Red" };
+  if (ratio < 100 + bufferPct) return { ratio, status: "Amber" };
+  return { ratio, status: "Green" };
+}
+
+/** Open claim cases past the 60-day NIIRA s.210 clock, as a count and share. */
+export function claimsAgeing(cases: { caseType: string; reportedDate: string | null; open: boolean }[], asOf = today(), days = 60): { open: number; late: number; pct: number } {
+  const claims = cases.filter((c) => c.open && c.caseType === "Claim awaiting settlement or decision" && c.reportedDate);
+  const late = claims.filter((c) => addDays(c.reportedDate!, days) < asOf).length;
+  return { open: claims.length, late, pct: claims.length ? Math.round((late / claims.length) * 100) : 0 };
+}
+
+export const LOSS_THRESHOLDS = { record: 1_000_000, board: 50_000_000 };
+
+/** Loss amounts converted to naira. Near misses carry no loss. */
+export function lossFigures(d: { currency?: unknown; fx_rate?: unknown; gross_loss?: unknown; recoveries?: unknown; insurance_recoveries?: unknown; near_miss?: unknown }) {
+  const g = num(d.gross_loss) ?? 0;
+  const rec = (num(d.recoveries) ?? 0) + (num(d.insurance_recoveries) ?? 0);
+  const net = d.near_miss === true ? 0 : g - rec;
+  const rate = d.currency === "USD" ? num(d.fx_rate) : 1;
+  const netNgn = rate === null ? null : Math.round(net * rate);
+  const grossNgn = rate === null ? null : Math.round((d.near_miss === true ? 0 : g) * rate);
+  return { net, netNgn, grossNgn };
+}
+
+export function lossBand(netNgn: number | null, nearMiss = false): string {
+  if (nearMiss) return "Near miss";
+  if (netNgn === null) return "Enter the exchange rate";
+  if (netNgn >= LOSS_THRESHOLDS.board) return "Board-reportable";
+  if (netNgn >= LOSS_THRESHOLDS.record) return "Reportable";
+  return "Below threshold";
+}
+
+export const RECURRENCE = ["One-off", "Monthly", "Quarterly", "Semi-annual", "Annual"] as const;
+
+/** Next due date for a recurring return, or null for one-off returns. */
+export function nextDue(due: string, recurrence: unknown): string | null {
+  switch (recurrence) {
+    case "Monthly":
+      return addMonths(due, 1);
+    case "Quarterly":
+      return addMonths(due, 3);
+    case "Semi-annual":
+      return addMonths(due, 6);
+    case "Annual":
+      return addMonths(due, 12);
+    default:
+      return null;
+  }
+}
+
+export type FilingStatus = "Filed on time" | "Filed late" | "Overdue" | "Due soon" | "Scheduled";
+
+export function filingStatus(due: string | null, submittedOn: string | null, asOf = today(), soonDays = 14): FilingStatus | null {
+  if (!due) return null;
+  if (submittedOn) return submittedOn <= due ? "Filed on time" : "Filed late";
+  if (due < asOf) return "Overdue";
+  if (due <= addDays(asOf, soonDays)) return "Due soon";
+  return "Scheduled";
+}
+
+export interface Reminder {
+  to: "owner" | "manager" | "escalation";
+  message: string;
+}
+
+/**
+ * Daily reminder plan for one open record. Regulatory returns get an early reminder
+ * (`leadDays`, default 14), 7 days, 1 day and on the day; once overdue they escalate to
+ * Compliance and the CRO every day for the first week and weekly after that.
+ * Other records keep the 7-day / due-day / weekly-overdue pattern with manager escalation.
+ */
+export function reminderPlan(r: { label: string; ref: string; due: string; isReturn: boolean; leadDays?: number | null }, asOf = today()): Reminder[] {
+  const daysTo = Math.round((Date.parse(r.due) - Date.parse(asOf)) / 864e5);
+  const out: Reminder[] = [];
+  if (daysTo > 0) {
+    const marks = r.isReturn ? [r.leadDays ?? 14, 7, 1] : [7];
+    if (marks.includes(daysTo)) out.push({ to: "owner", message: `${r.label} ${r.ref} is due in ${daysTo} ${daysTo === 1 ? "day" : "days"}.` });
+    return out;
+  }
+  if (daysTo === 0) return [{ to: "owner", message: `${r.label} ${r.ref} is due today.` }];
+  const late = -daysTo;
+  if (r.isReturn) {
+    if (late <= 7 || late % 7 === 0) {
+      out.push({ to: "owner", message: `${r.label} ${r.ref} is ${late} ${late === 1 ? "day" : "days"} overdue. File it or record why.` });
+      out.push({ to: "escalation", message: `Filing overdue: ${r.label} ${r.ref} is ${late} ${late === 1 ? "day" : "days"} past its due date.` });
+    }
+    return out;
+  }
+  if (late === 1 || late % 7 === 0) {
+    out.push({ to: "owner", message: `${r.label} ${r.ref} is ${late} ${late === 1 ? "day" : "days"} overdue.` });
+    if (late >= 7) out.push({ to: "manager", message: `Escalation: ${r.label} ${r.ref} owned by your team is ${late} days overdue.` });
+  }
+  return out;
+}
+
+/** ORSA submission falls 60 days after the financial year end (NAICOM Prudential Guidelines 2022 s.6.4). */
+export function orsaDue(yearEnd: unknown): string | null {
+  return typeof yearEnd === "string" && /^\d{4}-\d{2}-\d{2}$/.test(yearEnd) ? addDays(yearEnd, 60) : null;
+}
+
+/** Financial Condition Report publication falls 14 days after the report date (Prudential Guidelines 2022 s.6.5). */
+export function fcrPublishDue(reportDate: unknown): string | null {
+  return typeof reportDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(reportDate) ? addDays(reportDate, 14) : null;
 }

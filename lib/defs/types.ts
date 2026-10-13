@@ -21,15 +21,17 @@ export const ROLE_LABELS: Record<Role, string> = {
   admin: "Platform administrator",
   cro: "Chief Risk Officer",
   risk: "Risk team",
-  compliance: "Compliance team",
+  compliance: "Compliance (Enterprise Assurance)",
   mlro: "MLRO",
   auditor: "Internal Audit",
   investigator: "Investigator",
   hse: "HSE lead",
   esg: "Sustainability lead",
-  board: "Board member",
+  board: "Director / board committee member",
   staff: "Staff",
 };
+
+export const LINES_OF_DEFENCE = ["First line", "Second line", "Third line", "Board and oversight"] as const;
 
 export type FieldType =
   | "text"
@@ -83,6 +85,12 @@ export interface TransitionDef {
   /** The person who created the record may not trigger this transition. */
   fourEyes?: boolean;
   commentRequired?: boolean;
+  /** Fields holding user ids; the person acting must be none of them (e.g. a second, different director). */
+  distinctFrom?: string[];
+  /** Only the listed roles may act: no owner or administrator bypass (e.g. director signatures). */
+  strictRoles?: boolean;
+  /** Record who triggered the transition and when, into these data fields. */
+  stamp?: { by: string; on: string };
 }
 
 export interface WorkflowDef {
@@ -116,6 +124,7 @@ export interface TypeDef {
 
 export type ModuleKey =
   | "erm"
+  | "prudential"
   | "policy"
   | "compliance"
   | "actions"
@@ -135,6 +144,7 @@ export interface ModuleDef {
 
 export const MODULES: ModuleDef[] = [
   { key: "erm", label: "Enterprise risk", group: "Risk", summary: "Objectives, risks, appetite, controls, KRIs, losses and models" },
+  { key: "prudential", label: "ORSA and declarations", group: "Risk", summary: "ORSA, the directors' Risk Management Declaration and the Financial Condition Report" },
   { key: "thirdparty", label: "Third parties", group: "Risk", summary: "Reinsurers, brokers, TPAs and suppliers, tiered and monitored" },
   { key: "cases", label: "Cases", group: "Risk", summary: "Incidents, complaints, fraud, whistleblowing and breaches" },
   { key: "policy", label: "Policies", group: "Governance", summary: "Policy library, approvals, attestation and exceptions" },
