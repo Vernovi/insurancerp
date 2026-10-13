@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { midSentence } from "@/lib/format";
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth/current";
 import { getTypeDef } from "@/lib/engine/registry";
@@ -17,7 +18,7 @@ export default async function NewRecord({ params, searchParams }: { params: Prom
   const def = await getTypeDef(type);
   if (!def) notFound();
   if (!canCreate(user, def)) {
-    return <p className="rounded-md bg-warn-soft p-4 text-warn">Your role can&apos;t create {def.plural.toLowerCase()}. Ask an administrator if you need access.</p>;
+    return <p className="rounded-md bg-warn-soft p-4 text-warn">Your role can&apos;t create {midSentence(def.plural)}. Ask an administrator if you need access.</p>;
   }
   const scope = await getScope(user);
   let entityId: number | null = scope.selected?.id ?? user.entityIds.find((id) => scope.visible.some((e) => e.id === id)) ?? null;
@@ -40,7 +41,7 @@ export default async function NewRecord({ params, searchParams }: { params: Prom
     <div className="space-y-5">
       <header>
         <Link href={`/r/${def.key}`} className="text-sm text-ink-3 hover:text-accent">{def.plural}</Link>
-        <h1 className="text-2xl font-semibold tracking-tight">New {def.label.toLowerCase()}</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">New {midSentence(def.label)}</h1>
         {def.description && <p className="mt-1 max-w-2xl text-ink-2">{def.description}</p>}
       </header>
       <RecordForm
@@ -51,7 +52,7 @@ export default async function NewRecord({ params, searchParams }: { params: Prom
         entities={scope.visible.map((e) => ({ id: e.id, name: e.name }))}
         values={{ title: "", ownerId: user.id, orgUnitId: user.orgUnitId, entityId, data: defaults }}
         linkTo={linkTo}
-        submitLabel={`Create ${def.label.toLowerCase()}`}
+        submitLabel={`Create ${midSentence(def.label)}`}
         defaultOwner={user.id}
       />
     </div>

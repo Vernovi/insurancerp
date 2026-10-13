@@ -107,3 +107,11 @@ export const TONE_CLASS: Record<Tone, string> = {
   bad: "bg-bad-soft text-bad",
   crit: "bg-crit text-white",
 };
+
+/** Lower-case a type label for use mid-sentence, keeping acronyms (ORSA, KRI, ESG, HSE). */
+export function midSentence(label: string): string {
+  return label
+    .split(" ")
+    .map((w) => (/^[A-Z0-9&/()-]{2,}s?$/.test(w) ? w : w.toLowerCase()))
+    .join(" ");
+}

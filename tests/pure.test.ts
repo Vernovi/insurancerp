@@ -132,3 +132,13 @@ describe("definitions", () => {
     expect(new Set(p).size).toBe(p.length);
   });
 });
+
+describe("midSentence", () => {
+  it("lower-cases words but keeps acronyms", async () => {
+    const { midSentence } = await import("../lib/format");
+    expect(midSentence("ORSA")).toBe("ORSA");
+    expect(midSentence("Risk Management Declaration")).toBe("risk management declaration");
+    expect(midSentence("ESG metric")).toBe("ESG metric");
+    expect(midSentence("KRIs")).toBe("KRIs");
+  });
+});

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { midSentence } from "@/lib/format";
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth/current";
 import { getRecordForUser, canEdit } from "@/lib/engine/records";
@@ -14,14 +15,14 @@ export default async function EditRecord({ params }: { params: Promise<{ id: str
   if (!found) notFound();
   const { record: r, def } = found;
   if (!canEdit(user, def, r)) {
-    return <p className="rounded-md bg-warn-soft p-4 text-warn">You can view this record but not edit it. The owner or the {def.label.toLowerCase()} team can.</p>;
+    return <p className="rounded-md bg-warn-soft p-4 text-warn">You can view this record but not edit it. The owner or the {midSentence(def.label)} team can.</p>;
   }
   const [users, units, scope] = await Promise.all([loadUsers(), loadOrgUnits(), getScope(user)]);
   return (
     <div className="space-y-5">
       <header>
         <Link href={`/records/${r.id}`} className="text-sm text-ink-3 hover:text-accent">{r.ref}</Link>
-        <h1 className="text-2xl font-semibold tracking-tight">Edit {def.label.toLowerCase()}</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Edit {midSentence(def.label)}</h1>
       </header>
       <RecordForm
         def={def}

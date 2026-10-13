@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { midSentence } from "@/lib/format";
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth/current";
 import { getTypeDef } from "@/lib/engine/registry";
@@ -33,7 +34,7 @@ export default async function ListPage({ params, searchParams }: { params: Promi
         </div>
         <div className="flex gap-2">
           <a href={`/api/export/${def.key}?${qs}`} className="btn btn-secondary">Export CSV</a>
-          {canCreate(user, def) && <Link href={`/r/${def.key}/new`} className="btn btn-primary">New {def.label.toLowerCase()}</Link>}
+          {canCreate(user, def) && <Link href={`/r/${def.key}/new`} className="btn btn-primary">New {midSentence(def.label)}</Link>}
         </div>
       </header>
       <form className="flex flex-wrap items-end gap-3 rounded-md border border-line bg-surface p-3 text-sm">
@@ -66,7 +67,7 @@ export default async function ListPage({ params, searchParams }: { params: Promi
         users={users}
         units={units}
         entities={ents}
-        empty={filtered ? "No records match these filters." : canCreate(user, def) ? <>No {def.plural.toLowerCase()} yet. <Link className="text-accent underline" href={`/r/${def.key}/new`}>Create the first one</Link>.</> : "No records yet."}
+        empty={filtered ? "No records match these filters." : canCreate(user, def) ? <>No {midSentence(def.plural)} yet. <Link className="text-accent underline" href={`/r/${def.key}/new`}>Create the first one</Link>.</> : "No records yet."}
       />
     </div>
   );

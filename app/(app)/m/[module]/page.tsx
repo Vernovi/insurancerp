@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { midSentence } from "@/lib/format";
 import { notFound } from "next/navigation";
 import { and, count, eq, inArray, lt, sql } from "drizzle-orm";
 import { requireUser, hasRole } from "@/lib/auth/current";
@@ -69,7 +70,7 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
                 <td className={overdue ? "font-semibold text-bad" : "text-ink-3"}>{overdue}</td>
                 <td className="text-right">
                   {canCreate(user, def) && (
-                    <Link href={`/r/${def.key}/new`} className="btn btn-secondary">New {def.label.toLowerCase()}</Link>
+                    <Link href={`/r/${def.key}/new`} className="btn btn-secondary">New {midSentence(def.label)}</Link>
                   )}
                 </td>
               </tr>
