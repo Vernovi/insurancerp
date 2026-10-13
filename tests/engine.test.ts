@@ -18,9 +18,9 @@ async function userByEmail(prefix: string) {
 /** A user as the app sees them, with walled entities they may not see. */
 async function sessionUser(prefix: string) {
   const [u] = await db.select().from(schema.users).where(sql`(${schema.users.email} like ${prefix + "@%"} or ${schema.users.name} ilike ${prefix + " %"})`);
-  const walled = (await db.select().from(schema.entities)).filter((e) => e.walled).map((e) => e.id);
-  const mine = (u.entityIds ?? []) as number[];
-  return { id: u.id, roles: u.roles as never[], deniedEntities: walled.filter((w) => !mine.includes(w)) };
+  const { deniedEntities } = await import("../lib/engine/permissions");
+  const ents = await db.select({ id: schema.entities.id, walled: schema.entities.walled }).from(schema.entities);
+  return { id: u.id, roles: u.roles as never[], deniedEntities: deniedEntities(ents, (u.entityIds ?? []) as number[]) };
 }
 function addMonthsIso(iso: string, m: number) {
   const d = new Date(iso + "T00:00:00Z");
@@ -218,6 +218,43 @@ describe("group, entities and walls", () => {
     expect(await E.getRecordForUser(hauwa, bankRisk.id)).toBeNull();
     // and nobody can file a record into an entity they are walled off from
     await expect(E.createRecord(tunde, "risk", { title: "x", ownerId: tunde.id, orgUnitId: null, entityId: pfaRisk.entityId, raw: { description: "x", category: "Operational risk" } })).rejects.toThrow(/access to that entity/);
+  });
+
+  it("limits people to their own entities, on reads, lists and actions (UAT blockers 1 and 2)", async () => {
+    const insurerRisk = await byTitle("Under-reserving on motor and liability claims");
+    const amRisk = await byTitle("Dollar Fund liquidity squeeze on mass redemptions");
+    const hauwa = await sessionUser("hauwa"); // Pensions only
+    const tobi = await sessionUser("tobi"); // Microfinance bank only
+    const zainab = await sessionUser("zainab"); // Insurer only
+    const kemi = await sessionUser("kemi"); // Director, insurer only
+    const adaeze = await sessionUser("adaeze"); // Group CRO
+    expect(await E.getRecordForUser(hauwa, insurerRisk.id)).toBeNull();
+    expect(await E.getRecordForUser(tobi, insurerRisk.id)).toBeNull();
+    expect(await E.getRecordForUser(zainab, amRisk.id)).toBeNull();
+    expect(await E.getRecordForUser(adaeze, insurerRisk.id)).not.toBeNull();
+    await expect(E.transitionRecord(hauwa, insurerRisk.id, "close", "x")).rejects.toThrow(/not found/);
+    await expect(E.transitionRecord(tobi, insurerRisk.id, "close", "x")).rejects.toThrow(/not found/);
+    const insurer = insurerRisk.entityId;
+    for (const u of [zainab, kemi]) {
+      const rows = await E.listRecords(u, "risk");
+      expect(rows.length).toBeGreaterThan(0);
+      expect(rows.every((r) => r.entityId === insurer || r.entityId === null || r.ownerId === u.id || r.createdBy === u.id)).toBe(true);
+    }
+    expect((await E.listRecords(hauwa, "risk")).some((r) => r.entityId === insurer && r.ownerId !== hauwa.id && r.createdBy !== hauwa.id)).toBe(false);
+  });
+
+  it("lets a register record be withdrawn, with a reason, and keeps it (UAT blocker 4)", async () => {
+    const tunde = await sessionUser("tunde");
+    const r = await E.createRecord(tunde, "risk", { title: "Raised by mistake", ownerId: tunde.id, orgUnitId: null, entityId: (await byTitle("Under-reserving on motor and liability claims")).entityId, raw: { description: "x", category: "Operational risk" } });
+    await expect(E.transitionRecord(tunde, r.id, "withdraw_draft")).rejects.toThrow(/comment|reason/i);
+    await E.transitionRecord(tunde, r.id, "withdraw_draft", "Duplicate of RSK-0001");
+    const [after] = await db.select().from(schema.records).where(eq(schema.records.id, r.id));
+    expect(after.status).toBe("withdrawn");
+  });
+
+  it("refuses a loss event whose recoveries exceed the gross loss", async () => {
+    const tunde = await sessionUser("tunde");
+    await expect(E.createRecord(tunde, "loss_event", { title: "Bad loss", ownerId: tunde.id, orgUnitId: null, entityId: null, raw: { description: "x", event_date: "2026-10-01", gross_loss: "0", recoveries: "400", currency: "NGN" } })).rejects.toThrow(/Recoveries/);
   });
 
   it("uses an entity's own appetite before the group's", async () => {

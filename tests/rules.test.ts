@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { base32Encode, hotp, totp, verifyTotp, stepAt, mfaMandatory, newSecret, base32Decode } from "../lib/auth/totp";
-import { capitalCover, claimsAgeing, caseClock, checkTransition, lossFigures, lossBand, nextDue, filingStatus, reminderPlan, orsaDue, fcrPublishDue, NON_LIFE_MCR_NGN } from "../lib/engine/pure";
+import { capitalCover, claimsAgeing, caseClock, checkTransition, lossFigures, lossBand, lossProblems, nextDue, filingStatus, reminderPlan, orsaDue, fcrPublishDue, NON_LIFE_MCR_NGN } from "../lib/engine/pure";
 import { canView, canUseEntity, deniedEntities, entityAllowed } from "../lib/engine/permissions";
 import { rollPeriod, pickAppetite } from "../lib/engine/hooks";
 import { DEFAULT_TYPES } from "../lib/defs/modules";
@@ -43,14 +43,22 @@ describe("TOTP (RFC 6238)", () => {
     expect(mfaMandatory({ roles: ["risk"], mfaRequired: true })).toBe(true);
     expect(mfaMandatory({ roles: ["risk"], mfaRequired: false })).toBe(false);
   });
+  it("applies the tenant MFA policy", () => {
+    expect(mfaMandatory({ roles: ["staff"], mfaRequired: false }, "all")).toBe(true);
+    expect(mfaMandatory({ roles: ["board"], mfaRequired: false }, "privileged")).toBe(true);
+    expect(mfaMandatory({ roles: ["compliance"], mfaRequired: false }, "privileged")).toBe(true);
+    expect(mfaMandatory({ roles: ["staff"], mfaRequired: false }, "privileged")).toBe(false);
+    expect(mfaMandatory({ roles: ["admin"], mfaRequired: false }, "admin")).toBe(true);
+  });
 });
 
 describe("entity walls", () => {
-  const walled = [3, 7];
-  it("denies walled entities a person isn't a member of", () => {
-    expect(deniedEntities(walled, [3])).toEqual([7]);
-    expect(deniedEntities(walled, [])).toEqual([3, 7]);
-    expect(deniedEntities(walled, [3, 7, 1])).toEqual([]);
+  const ents = [{ id: 1, walled: false }, { id: 2, walled: false }, { id: 3, walled: true }, { id: 7, walled: true }];
+  it("treats membership as an allow-list, and empty membership as group-wide without walled entities", () => {
+    expect(deniedEntities(ents, [3])).toEqual([1, 2, 7]);
+    expect(deniedEntities(ents, [1])).toEqual([2, 3, 7]);
+    expect(deniedEntities(ents, [])).toEqual([3, 7]);
+    expect(deniedEntities(ents, [1, 2, 3, 7])).toEqual([]);
   });
   it("hides walled records, except from their owner and creator", () => {
     const u = { id: 10, roles: ["cro" as const], deniedEntities: [7] };
@@ -179,5 +187,44 @@ describe("Risk Management Declaration: two different directors", () => {
     expect(checkTransition(orsa, r, tr("orsa", "approve"), director(1))).toBeNull();
     expect(checkTransition(orsa, r, tr("orsa", "approve"), { id: 9, roles: ["cro"] })).toMatch(/Only these roles/);
     expect(checkTransition(orsa, r, tr("orsa", "approve"), { id: 3, roles: ["admin"] })).toMatch(/Only these roles/);
+  });
+});
+
+describe("loss event checks", () => {
+  const t = "2026-10-13";
+  it("refuses recoveries above gross and impossible dates", () => {
+    expect(lossProblems({ gross_loss: 0, recoveries: 400, event_date: "2026-10-01" }, t)).toMatch(/Recoveries/);
+    expect(lossProblems({ gross_loss: 500, recoveries: 300, insurance_recoveries: 300, event_date: "2026-10-01" }, t)).toMatch(/Recoveries/);
+    expect(lossProblems({ gross_loss: 500, event_date: "2026-11-01" }, t)).toMatch(/future/);
+    expect(lossProblems({ gross_loss: 500, event_date: "2026-10-05", discovery_date: "2026-10-01" }, t)).toMatch(/before the event/);
+    expect(lossProblems({ gross_loss: 500, recoveries: 100, event_date: "2026-10-05", discovery_date: "2026-10-06" }, t)).toBeNull();
+  });
+  it("needs someone independent to validate and close a loss", () => {
+    const loss = DEFAULT_TYPES.find((x) => x.key === "loss_event")!;
+    for (const k of ["validate", "close"]) {
+      const tr = loss.workflow.transitions.find((x) => x.key === k)!;
+      expect(tr.ownerAllowed).toBe(false);
+      expect(tr.fourEyes).toBe(true);
+    }
+  });
+});
+
+describe("withdraw", () => {
+  it("gives every register a way to withdraw a record without deleting it", () => {
+    for (const t of DEFAULT_TYPES) {
+      const keys = t.workflow.transitions.map((x) => x.key);
+      expect(keys.some((k) => ["cancel", "withdraw", "withdraw_draft"].includes(k))).toBe(true);
+      const w = t.workflow.transitions.find((x) => x.key === "withdraw");
+      if (w && t.key !== "attestation") { expect(w.ownerAllowed).toBe(false); expect(w.commentRequired).toBe(true); }
+    }
+  });
+});
+
+describe("session generation", () => {
+  it("carries the generation in the token", async () => {
+    process.env.SESSION_SECRET = "x".repeat(40);
+    const { signSession, readSession } = await import("../lib/auth/session");
+    const tok = await signSession(5, "a@b.c", false, 3);
+    expect((await readSession(tok))!.gen).toBe(3);
   });
 });

@@ -17,12 +17,14 @@ export const users = pgTable("users", {
   orgUnitId: integer("org_unit_id"),
   managerId: integer("manager_id"),
   active: boolean("active").notNull().default(true),
-  /** Entities whose walled data this person may see (and their default entity first). */
+  /** The entities this person may see (an allow-list). Empty means every entity except walled ones. */
   entityIds: jsonb("entity_ids").$type<number[]>().notNull().default([]),
   lineOfDefence: text("line_of_defence"),
   totpSecret: text("totp_secret"),
   mfaEnabled: boolean("mfa_enabled").notNull().default(false),
   mfaRequired: boolean("mfa_required").notNull().default(false),
+  /** Bumped on sign-out, password change, deactivation and MFA reset: every older session stops working. */
+  sessionGen: integer("session_gen").notNull().default(0),
   mfaLastStep: integer("mfa_last_step"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -179,5 +181,6 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret text;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_enabled boolean NOT NULL DEFAULT false;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_required boolean NOT NULL DEFAULT false;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_last_step integer;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS session_gen integer NOT NULL DEFAULT 0;
 CREATE TABLE IF NOT EXISTS api_tokens (id serial PRIMARY KEY, name text NOT NULL, token_hash text NOT NULL, created_by integer, created_at timestamptz NOT NULL DEFAULT now(), revoked boolean NOT NULL DEFAULT false);
 `;

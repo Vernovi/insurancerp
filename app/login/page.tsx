@@ -4,6 +4,8 @@ import { getDb, dbMode } from "@/lib/db";
 import { isDemoTenant } from "@/lib/db/seed";
 import HostingNote from "@/components/HostingNote";
 import LoginForm from "./LoginForm";
+import { getMfaPolicy } from "@/lib/auth/policy";
+import { mfaPolicySentence } from "@/lib/auth/totp";
 
 export const dynamic = "force-dynamic";
 
@@ -30,7 +32,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         <div className="w-full max-w-sm">
           {demo && <p className="mb-6 inline-block rounded-sm bg-accent-soft px-2 py-1 text-xs font-semibold tracking-wide text-accent">FICTIONAL DEMO DATA</p>}
           <h2 className="text-2xl font-semibold">Sign in</h2>
-          <p className="mt-1 text-sm text-ink-2">Use your work email. Administrators confirm with an authenticator app.</p>
+          <p className="mt-1 text-sm text-ink-2">Use your work email. {mfaPolicySentence(await getMfaPolicy())}</p>
           <LoginForm next={next ?? "/"} />
           {hints && (
             <div className="mt-8 rounded-md border border-line bg-canvas p-4 text-sm text-ink-2">

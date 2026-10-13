@@ -33,7 +33,7 @@ export default function TransitionBar({ id, options }: { id: number; options: Tr
               formNoValidate={!o.commentRequired}
               onClick={() => setChosen(o.key)}
               disabled={pending}
-              className={`btn ${o.primary ? "btn-primary" : o.key === "return" || o.key === "reject" || o.key === "cancel" ? "btn-danger" : "btn-secondary"}`}
+              className={`btn ${o.primary ? "btn-primary" : ["return", "reject", "cancel", "withdraw", "withdraw_draft"].includes(o.key) ? "btn-danger" : "btn-secondary"}`}
             >
               {o.label}
             </button>

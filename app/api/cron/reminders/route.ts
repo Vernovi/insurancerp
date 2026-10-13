@@ -19,13 +19,13 @@ export async function GET(req: Request) {
   const t = today();
   const rows = await db.select().from(schema.records).where(and(isNotNull(schema.records.dueDate), lte(schema.records.dueDate, addDays(t, 90)), gte(schema.records.dueDate, addDays(t, -365))));
   const users = await db.select().from(schema.users).where(eq(schema.users.active, true));
-  const walled = (await db.select({ id: schema.entities.id }).from(schema.entities).where(eq(schema.entities.walled, true))).map((e) => e.id);
+  const entities = await db.select({ id: schema.entities.id, walled: schema.entities.walled }).from(schema.entities);
   const managerOf = new Map(users.map((u) => [u.id, u.managerId]));
   // Escalation goes to Compliance (Enterprise Assurance) and the CRO who can see the entity.
   const escalationFor = (entityId: number | null) =>
     users
       .filter((u) => (u.roles as string[]).some((r) => r === "compliance" || r === "cro"))
-      .filter((u) => entityId === null || !deniedEntities(walled, (u.entityIds ?? []) as number[]).includes(entityId))
+      .filter((u) => entityId === null || !deniedEntities(entities, (u.entityIds ?? []) as number[]).includes(entityId))
       .map((u) => u.id);
   const out: { userId: number; recordId: number; message: string }[] = [];
   for (const r of rows) {

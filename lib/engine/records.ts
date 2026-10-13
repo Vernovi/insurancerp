@@ -9,7 +9,8 @@ import { after, compute, onTransition, type HookCtx, type HookRecord } from "./h
 
 export type RecordRow = typeof schema.records.$inferSelect;
 
-export class EngineError extends Error {}
+import { EngineError } from "./errors";
+export { EngineError };
 
 function toHook(r: RecordRow): HookRecord {
   return {

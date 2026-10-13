@@ -9,7 +9,9 @@ import { loadEntities } from "@/lib/scope";
 import { HOSTING_NOTE } from "@/components/HostingNote";
 import { fmtDateTime } from "@/lib/format";
 import ActionForm from "@/components/ActionForm";
-import { createUserAction, updateUserAction, createApiTokenAction, revokeApiTokenAction, saveEntityAction } from "@/app/actions";
+import { createUserAction, updateUserAction, createApiTokenAction, revokeApiTokenAction, saveEntityAction, saveMfaPolicyAction } from "@/app/actions";
+import { getMfaPolicy } from "@/lib/auth/policy";
+import { MFA_POLICIES } from "@/lib/auth/totp";
 
 export default async function Admin() {
   const user = await requireUser();
@@ -18,12 +20,26 @@ export default async function Admin() {
   const [units, types, tokens, ents, people] = await Promise.all([loadOrgUnits(), loadTypes(), db.select().from(schema.apiTokens).orderBy(desc(schema.apiTokens.createdAt)), loadEntities(), db.select().from(schema.users).orderBy(schema.users.name)]);
   const users = people;
   const unitName = new Map(units.map((u) => [u.id, u.name]));
+  const mfaPolicy = await getMfaPolicy();
   return (
     <div className="space-y-10">
       <header>
         <h1 className="text-2xl font-semibold tracking-tight">Settings and users</h1>
         <p className="mt-1 text-ink-2">Database: {dbMode() === "postgres" ? "Postgres (persistent)" : "embedded demo database (resets on restart)"}. {HOSTING_NOTE}</p>
       </header>
+
+      <section aria-labelledby="mfa-h" className="space-y-2">
+        <h2 id="mfa-h" className="text-lg font-semibold">Two-step sign-in</h2>
+        <p className="max-w-2xl text-sm text-ink-2">Who must confirm sign-in with an authenticator app. Administrators always must. You can also require it for one person below. Tightening this signs out anyone it now covers who signed in without a code.</p>
+        <ActionForm action={saveMfaPolicyAction} className="flex flex-wrap items-end gap-2" resetOnOk={false}>
+          <label className="block text-sm"><span className="font-semibold">Required for</span>
+            <select name="policy" defaultValue={mfaPolicy} className="field-input mt-1 w-[28rem] max-w-full">
+              {MFA_POLICIES.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+            </select>
+          </label>
+          <button className="btn btn-primary">Save</button>
+        </ActionForm>
+      </section>
 
       <section aria-labelledby="users-h" className="space-y-3">
         <h2 id="users-h" className="text-lg font-semibold">People and roles</h2>
@@ -94,7 +110,7 @@ export default async function Admin() {
             </label>
             <label className="flex items-center gap-2 text-sm md:col-span-2 md:pt-6"><input type="checkbox" name="mfaRequired" /> Require two-step sign-in</label>
             <fieldset className="md:col-span-3">
-              <legend className="text-sm font-semibold">Entities (access to walled entities&apos; records)</legend>
+              <legend className="text-sm font-semibold">Entities this person can see (none ticked: every entity except walled ones)</legend>
               <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
                 {ents.map((e) => <label key={e.id} className="flex items-center gap-1 text-sm"><input type="checkbox" name="entities" value={e.id} /> {e.name}{e.walled ? " (walled)" : ""}</label>)}
               </div>
@@ -112,7 +128,7 @@ export default async function Admin() {
 
       <section aria-labelledby="ent-h" className="space-y-3">
         <h2 id="ent-h" className="text-lg font-semibold">Group entities</h2>
-        <p className="max-w-2xl text-sm text-ink-2">Each legal entity carries its licence, regulators and applicable frameworks; its own appetite is set in Risk appetite. A walled entity&apos;s records are visible only to people given that entity above (plus each record&apos;s owner and creator). * marks walled entities.</p>
+        <p className="max-w-2xl text-sm text-ink-2">Each legal entity carries its licence, regulators and applicable frameworks; its own appetite is set in Risk appetite. People see only the entities ticked for them; someone with none ticked sees every entity except walled ones. A record&apos;s owner and creator can always see it. * marks walled entities.</p>
         <div className="grid gap-3 lg:grid-cols-2">
           {ents.map((e) => (
             <ActionForm key={e.id} action={saveEntityAction} resetOnOk={false} className="space-y-2 rounded-md border border-line bg-surface p-4 text-sm">

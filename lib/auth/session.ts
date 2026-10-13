@@ -29,20 +29,20 @@ export function resetSessionKeyCache() {
 }
 
 /** Full session. `em` binds the token to the account's email, so a reseeded database can't reuse it. */
-export async function signSession(userId: number, email: string, mfa: boolean): Promise<string> {
-  return new SignJWT({ uid: userId, em: email, mfa, stage: "full" })
+export async function signSession(userId: number, email: string, mfa: boolean, gen = 0): Promise<string> {
+  return new SignJWT({ uid: userId, em: email, mfa, gen, stage: "full" })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime(`${MAX_AGE_HOURS}h`)
     .sign(await secret());
 }
 
-export async function readSession(token: string | undefined): Promise<{ uid: number; em: string; mfa: boolean } | null> {
+export async function readSession(token: string | undefined): Promise<{ uid: number; em: string; mfa: boolean; gen: number } | null> {
   if (!token) return null;
   try {
     const { payload } = await jwtVerify(token, await secret(), { algorithms: ["HS256"] });
     if (payload.stage !== "full" || typeof payload.uid !== "number" || typeof payload.em !== "string") return null;
-    return { uid: payload.uid, em: payload.em, mfa: payload.mfa === true };
+    return { uid: payload.uid, em: payload.em, mfa: payload.mfa === true, gen: typeof payload.gen === "number" ? payload.gen : -1 };
   } catch {
     return null;
   }

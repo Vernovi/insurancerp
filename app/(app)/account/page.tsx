@@ -3,6 +3,7 @@ import QRCode from "qrcode";
 import { requireUser } from "@/lib/auth/current";
 import { getDb, schema } from "@/lib/db";
 import { mfaMandatory, otpauthUri } from "@/lib/auth/totp";
+import { getMfaPolicy } from "@/lib/auth/policy";
 import { ROLE_LABELS, type Role } from "@/lib/defs/types";
 import { loadEntities } from "@/lib/scope";
 import ActionForm from "@/components/ActionForm";
@@ -13,7 +14,7 @@ export default async function Account() {
   const db = await getDb();
   const [u] = await db.select().from(schema.users).where(eq(schema.users.id, user.id));
   const ents = await loadEntities();
-  const mandatory = mfaMandatory({ roles: user.roles, mfaRequired: u.mfaRequired });
+  const mandatory = mfaMandatory({ roles: user.roles, mfaRequired: u.mfaRequired }, await getMfaPolicy());
   const settingUp = !u.mfaEnabled && !!u.totpSecret;
   const qr = settingUp ? await QRCode.toString(otpauthUri(u.totpSecret!, u.email, process.env.APP_NAME ?? "Vernovi GRC"), { type: "svg", margin: 1, width: 176 }) : null;
   const myEntities = ents.filter((e) => user.entityIds.includes(e.id));
@@ -31,7 +32,7 @@ export default async function Account() {
           <div><dt className="text-xs font-semibold text-ink-3">Roles</dt><dd>{user.roles.map((r) => ROLE_LABELS[r as Role] ?? r).join(", ")}</dd></div>
           <div><dt className="text-xs font-semibold text-ink-3">Entities</dt><dd>{myEntities.length ? myEntities.map((e) => e.name).join(", ") : "Group-wide (no walled entities)"}</dd></div>
         </dl>
-        <p className="mt-3 text-xs text-ink-3">Records of walled entities you are not a member of are hidden from you. An administrator manages your access.</p>
+        <p className="mt-3 text-xs text-ink-3">You see records of the entities listed here only (or, if none are listed, every entity except walled ones), plus records you own or raised. An administrator manages your access.</p>
       </section>
       <section className="rounded-md border border-line bg-surface p-5 text-sm" aria-labelledby="mfa-h">
         <h2 id="mfa-h" className="text-base font-semibold">Two-step sign-in</h2>

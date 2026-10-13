@@ -92,7 +92,24 @@ export function otpauthUri(secret: string, account: string, issuer: string): str
   return `otpauth://totp/${label}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=${DIGITS}&period=${STEP_SECONDS}`;
 }
 
-/** Whether a user must use MFA: administrators always, others when an admin requires it. */
-export function mfaMandatory(u: { roles: string[]; mfaRequired: boolean }): boolean {
-  return u.roles.includes("admin") || u.mfaRequired;
+/** Who must use an authenticator app. Administrators always do, whatever the policy. */
+export type MfaPolicy = "admin" | "privileged" | "all";
+export const MFA_POLICIES: { key: MfaPolicy; label: string }[] = [
+  { key: "admin", label: "Administrators only" },
+  { key: "privileged", label: "Administrators, risk, compliance, audit, investigations and board" },
+  { key: "all", label: "Everyone" },
+];
+export const PRIVILEGED_ROLES = ["admin", "cro", "risk", "compliance", "mlro", "auditor", "investigator", "board"];
+
+/** Whether a user must use MFA: administrators always; others by policy or when an admin requires it. */
+export function mfaMandatory(u: { roles: string[]; mfaRequired: boolean }, policy: MfaPolicy = "admin"): boolean {
+  if (u.roles.includes("admin") || u.mfaRequired || policy === "all") return true;
+  return policy === "privileged" && u.roles.some((r) => PRIVILEGED_ROLES.includes(r));
+}
+
+/** The sign-in page sentence, so it always says what will actually happen. */
+export function mfaPolicySentence(policy: MfaPolicy): string {
+  if (policy === "all") return "Everyone confirms sign-in with an authenticator app.";
+  if (policy === "privileged") return "Administrators and risk, compliance, audit, investigations and board users confirm with an authenticator app.";
+  return "Administrators confirm with an authenticator app. Other users can turn it on from My account.";
 }

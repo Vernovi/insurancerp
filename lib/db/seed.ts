@@ -124,7 +124,7 @@ async function syncDemoPassword(db: DB) {
     value = randomBytes(24).toString("base64url"); // a deployed demo must never keep the published local default
   }
   if (!value) return;
-  await db.execute(sql`UPDATE users SET password_hash = ${hashPassword(value)} WHERE email LIKE ${"%@" + DEMO_DOMAIN}`);
+  await db.execute(sql`UPDATE users SET password_hash = ${hashPassword(value)}, session_gen = session_gen + 1 WHERE email LIKE ${"%@" + DEMO_DOMAIN}`);
   await put(db, "demo_pw", env ? hashPassword(env) : "random");
 }
 

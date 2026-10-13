@@ -8,7 +8,8 @@ import { createHash, randomBytes } from "node:crypto";
 import { getDb, schema } from "@/lib/db";
 import { getCurrentUser, requireUser, hasRole } from "@/lib/auth/current";
 import { signSession, signPending, readPending, SESSION_COOKIE, SESSION_MAX_AGE, MFA_COOKIE, MFA_MAX_AGE } from "@/lib/auth/session";
-import { mfaMandatory, newSecret, verifyTotp } from "@/lib/auth/totp";
+import { mfaMandatory, newSecret, verifyTotp, MFA_POLICIES } from "@/lib/auth/totp";
+import { getMfaPolicy } from "@/lib/auth/policy";
 import { ENTITY_COOKIE } from "@/lib/scope";
 import { hashPassword, verifyPassword } from "@/lib/auth/password";
 import {
@@ -76,9 +77,9 @@ const safeNext = (v: unknown) => {
 };
 const cookieOpts = (maxAge: number) => ({ httpOnly: true, sameSite: "lax" as const, secure: process.env.NODE_ENV === "production", path: "/", maxAge });
 
-async function startFullSession(u: { id: number; email: string }, mfa: boolean) {
+async function startFullSession(u: { id: number; email: string; sessionGen: number }, mfa: boolean) {
   const jar = await cookies();
-  jar.set(SESSION_COOKIE, await signSession(u.id, u.email, mfa), cookieOpts(SESSION_MAX_AGE));
+  jar.set(SESSION_COOKIE, await signSession(u.id, u.email, mfa, u.sessionGen ?? 0), cookieOpts(SESSION_MAX_AGE));
   jar.delete(MFA_COOKIE);
 }
 
@@ -97,7 +98,7 @@ export async function login(_: ActionState, fd: FormData): Promise<ActionState> 
   }
   attempts.delete(key);
   const next = safeNext(fd.get("next"));
-  const mandatory = mfaMandatory({ roles: (u.roles ?? []) as string[], mfaRequired: u.mfaRequired });
+  const mandatory = mfaMandatory({ roles: (u.roles ?? []) as string[], mfaRequired: u.mfaRequired }, await getMfaPolicy());
   if ((u.mfaEnabled && u.totpSecret) || mandatory) {
     const stage = u.mfaEnabled && u.totpSecret ? "verify" : "enrol";
     if (stage === "enrol") await db.update(schema.users).set({ totpSecret: newSecret(), mfaEnabled: false, mfaLastStep: null }).where(eq(schema.users.id, u.id));
@@ -161,7 +162,7 @@ export async function disableOwnMfa(): Promise<void> {
   const user = await requireUser();
   const db = await getDb();
   const [u] = await db.select().from(schema.users).where(eq(schema.users.id, user.id));
-  if (!u || mfaMandatory({ roles: (u.roles ?? []) as string[], mfaRequired: u.mfaRequired })) return;
+  if (!u || mfaMandatory({ roles: (u.roles ?? []) as string[], mfaRequired: u.mfaRequired }, await getMfaPolicy())) return;
   await db.update(schema.users).set({ mfaEnabled: false, totpSecret: null, mfaLastStep: null }).where(eq(schema.users.id, u.id));
   await audit(db, u.id, "mfa_disabled", null);
   revalidatePath("/account");
@@ -178,9 +179,18 @@ export async function setEntityScope(fd: FormData) {
   redirect(safeNext(fd.get("next")));
 }
 
+/** Ends every session for this person: older tokens no longer match their generation. */
+async function endSessions(db: Awaited<ReturnType<typeof getDb>>, userId: number) {
+  await db.update(schema.users).set({ sessionGen: sql`${schema.users.sessionGen} + 1` }).where(eq(schema.users.id, userId));
+}
+
 export async function logout() {
   const u = await getCurrentUser();
-  if (u) await audit(await getDb(), u.id, "logout", null);
+  if (u) {
+    const db = await getDb();
+    await endSessions(db, u.id);
+    await audit(db, u.id, "logout", null);
+  }
   const jar = await cookies();
   jar.delete(SESSION_COOKIE);
   jar.delete(MFA_COOKIE);
@@ -435,6 +445,7 @@ export async function updateUserAction(_: ActionState, fd: FormData): Promise<Ac
       if (pw.length < 12) return { error: "Passwords must be at least 12 characters." };
       await db.update(schema.users).set({ passwordHash: hashPassword(pw) }).where(eq(schema.users.id, id));
     }
+    if (pw || resetMfa || !active) await endSessions(db, id);
     await audit(db, admin.id, "user_update", null, { id, roles, active, entityIds, mfaRequired, mfaReset: resetMfa, passwordReset: !!pw });
     revalidatePath("/admin");
     return { ok: "Saved." };
@@ -585,6 +596,23 @@ export async function saveEntityAction(_: ActionState, fd: FormData): Promise<Ac
     await audit(db, admin.id, "entity_update", null, { id, walled: fd.get("walled") === "on" });
     revalidatePath("/", "layout");
     return { ok: "Entity saved." };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** Tenant-wide two-step sign-in policy. Tightening it ends sessions that were opened without a code. */
+export async function saveMfaPolicyAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  try {
+    const admin = await requireAdmin();
+    const v = String(fd.get("policy") ?? "");
+    if (!MFA_POLICIES.some((p) => p.key === v)) return { error: "Choose one of the options." };
+    const db = await getDb();
+    const before = await getMfaPolicy();
+    await db.execute(sql`INSERT INTO app_settings (key, value) VALUES ('mfa_policy', ${v}) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`);
+    await audit(db, admin.id, "mfa_policy", null, { from: before, to: v });
+    revalidatePath("/admin");
+    return { ok: "Saved. People now covered by the policy will set up or enter a code at their next sign-in." };
   } catch (e) {
     return fail(e);
   }

@@ -1,4 +1,4 @@
-import type { FieldDef, TypeDef, WorkflowDef, StateDef } from "./types";
+import type { FieldDef, TypeDef, WorkflowDef, StateDef, Role } from "./types";
 import { LINES_OF_DEFENCE } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -271,9 +271,9 @@ const erm: TypeDef[] = [
       { key: "near_miss", label: "Near miss (no loss)", type: "checkbox" },
       { key: "currency", label: "Currency", type: "select", options: ["NGN", "USD"], section: "Amounts" },
       { key: "fx_rate", label: "Exchange rate (NGN per USD on the event date)", type: "number", section: "Amounts", showIf: { field: "currency", in: ["USD"] } },
-      { key: "gross_loss", label: "Gross loss", type: "number", section: "Amounts", help: "In the currency above" },
-      { key: "insurance_recoveries", label: "Insurance recoveries", type: "number", section: "Amounts" },
-      { key: "recoveries", label: "Other recoveries", type: "number", section: "Amounts" },
+      { key: "gross_loss", label: "Gross loss", type: "number", min: 0, section: "Amounts", help: "In the currency above" },
+      { key: "insurance_recoveries", label: "Insurance recoveries", type: "number", min: 0, section: "Amounts" },
+      { key: "recoveries", label: "Other recoveries", type: "number", min: 0, section: "Amounts" },
       { key: "net_loss", label: "Net loss (event currency)", type: "computed", readOnly: true, section: "Amounts" },
       { key: "gross_loss_ngn", label: "Gross loss in naira", type: "currency", readOnly: true, section: "Amounts" },
       { key: "net_loss_ngn", label: "Net loss in naira", type: "currency", readOnly: true, list: true, section: "Amounts" },
@@ -1335,6 +1335,27 @@ export const DEFAULT_TYPES: TypeDef[] = [
   ...audit,
   ...bcm,
 ];
+
+// Withdraw: every register can take a mistaken or superseded record out of play without deleting it.
+// The owner (or an editor) may withdraw from the first stage; later stages need the CRO or an editor
+// who is not the owner, with a reason. The record, its versions and the audit trail are kept.
+for (const t of DEFAULT_TYPES) {
+  const w = t.workflow;
+  if (w.transitions.some((x) => x.key === "cancel" || x.key === "withdraw") || w.states.some((s) => s.key === "withdrawn")) continue;
+  const open = w.states.filter((s) => !s.final).map((s) => s.key);
+  if (open.length === 0) continue;
+  const roles = Array.from(new Set<Role>(["cro", ...(t.editRoles ?? [])]));
+  w.states.push({ key: "withdrawn", label: "Withdrawn", tone: "neutral", final: true });
+  w.transitions.push({ key: "withdraw_draft", label: "Withdraw", from: [w.initial], to: "withdrawn", roles, commentRequired: true });
+  const later = open.filter((k) => k !== w.initial);
+  if (later.length) w.transitions.push({ key: "withdraw", label: "Withdraw", from: later, to: "withdrawn", roles, ownerAllowed: false, commentRequired: true });
+}
+
+// Loss events: validating and closing need someone other than the person who reported or owns the loss.
+for (const t of DEFAULT_TYPES) {
+  if (t.key !== "loss_event") continue;
+  for (const tr of t.workflow.transitions) if (tr.key === "validate" || tr.key === "close") Object.assign(tr, { ownerAllowed: false, fourEyes: true });
+}
 
 // The "record_review" transition requirement for exercise needs met_tolerance.
 for (const t of DEFAULT_TYPES) {

@@ -3,7 +3,7 @@ import type { TypeDef, Role } from "../defs/types";
 export interface PermUser {
   id: number;
   roles: Role[];
-  /** Walled entities (e.g. a PFA or a bank) whose records this person may not see. */
+  /** Entities whose records this person may not see (see deniedEntities). */
   deniedEntities?: number[];
 }
 export interface PermRecord {
@@ -15,13 +15,17 @@ export interface PermRecord {
 
 const has = (u: PermUser, roles: Role[] = []) => u.roles.includes("admin") || roles.some((r) => u.roles.includes(r));
 
-/** Walled entities a person is not a member of. */
-export function deniedEntities(walled: number[], memberOf: number[]): number[] {
+/**
+ * Entities a person may not see. A non-empty membership is an allow-list: everything else is denied.
+ * An empty membership means group-wide: every entity except the walled ones.
+ */
+export function deniedEntities(entities: { id: number; walled: boolean }[], memberOf: number[]): number[] {
   const m = new Set(memberOf);
-  return walled.filter((id) => !m.has(id));
+  if (m.size > 0) return entities.filter((e) => !m.has(e.id)).map((e) => e.id);
+  return entities.filter((e) => e.walled).map((e) => e.id);
 }
 
-/** Entity wall: records of a walled entity are visible only to that entity's people (plus the record's owner and creator). */
+/** Entity scope: records of an entity outside the person's scope are visible only to the record's owner and creator. */
 export function entityAllowed(u: PermUser, r: PermRecord): boolean {
   if (r.entityId === null || r.entityId === undefined) return true;
   if (!(u.deniedEntities ?? []).includes(r.entityId)) return true;

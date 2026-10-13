@@ -315,6 +315,19 @@ export function lossFigures(d: { currency?: unknown; fx_rate?: unknown; gross_lo
   return { net, netNgn, grossNgn };
 }
 
+/** Problems that stop a loss event being saved: recoveries above the gross loss, impossible dates. */
+export function lossProblems(d: { gross_loss?: unknown; recoveries?: unknown; insurance_recoveries?: unknown; near_miss?: unknown; event_date?: unknown; discovery_date?: unknown }, todayIso: string): string | null {
+  const g = num(d.gross_loss) ?? 0;
+  const rec = (num(d.recoveries) ?? 0) + (num(d.insurance_recoveries) ?? 0);
+  if (d.near_miss !== true && rec > g) return "Recoveries can't be more than the gross loss.";
+  const ev = typeof d.event_date === "string" ? d.event_date : null;
+  const disc = typeof d.discovery_date === "string" && d.discovery_date ? d.discovery_date : null;
+  if (ev && ev > todayIso) return "The event date can't be in the future.";
+  if (disc && disc > todayIso) return "The discovery date can't be in the future.";
+  if (ev && disc && disc < ev) return "The discovery date can't be before the event date.";
+  return null;
+}
+
 export function lossBand(netNgn: number | null, nearMiss = false): string {
   if (nearMiss) return "Near miss";
   if (netNgn === null) return "Enter the exchange rate";

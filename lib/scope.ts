@@ -18,7 +18,7 @@ export async function entityMap(): Promise<Map<number, Entity>> {
 }
 
 export interface Scope {
-  /** Entities this person may see (walled ones they belong to, plus all unwalled). */
+  /** Entities this person may see (their own; group-wide people see every unwalled one). */
   visible: Entity[];
   /** The entity chosen in the switcher, or null for the whole group. */
   selected: Entity | null;

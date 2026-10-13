@@ -19,6 +19,7 @@ import {
   kriStatus,
   lossBand,
   lossFigures,
+  lossProblems,
   nextDue,
   num,
   orsaDue,
@@ -30,6 +31,7 @@ import {
   today,
 } from "./pure";
 import { WALLED_CASE_TYPES } from "../defs/modules";
+import { EngineError } from "./errors";
 
 export interface HookRecord {
   id: number;
@@ -153,6 +155,8 @@ export async function compute(
     case "loss": {
       if (!d.currency) d.currency = "NGN";
       if (d.event_source === "Near miss") d.near_miss = true;
+      const problem = lossProblems(d, today());
+      if (problem) throw new EngineError(problem);
       const f = lossFigures(d);
       d.net_loss = f.net;
       d.net_loss_ngn = f.netNgn;
