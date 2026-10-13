@@ -20,16 +20,19 @@ async function connect(): Promise<DB> {
     const { Pool } = await import("pg");
     const pool = new Pool({ connectionString: url, max: 5, idleTimeoutMillis: 10_000 });
     const db = drizzlePg(pool, { schema });
-    // Serialise first-run bootstrap across concurrent serverless instances.
+    // Serialise first-run bootstrap across concurrent serverless instances. A transaction-scoped
+    // advisory lock is released by COMMIT/ROLLBACK, so it cannot leak through Neon's pooler
+    // (a session-level lock taken on one pooled backend and "released" on another stays held).
     const client = await pool.connect();
     try {
-      await client.query("SELECT pg_advisory_lock(73191)");
-      await client.query(schema.BOOTSTRAP_SQL);
-      const clientDb = drizzlePg(client, { schema }) as unknown as DB;
-      // One transaction: an interrupted first boot (e.g. a function timeout) rolls back
-      // completely and the next request seeds again from scratch.
       await client.query("BEGIN");
       try {
+        await client.query("SET LOCAL lock_timeout = '25s'");
+        await client.query("SELECT pg_advisory_xact_lock(73192)");
+        await client.query(schema.BOOTSTRAP_SQL);
+        const clientDb = drizzlePg(client, { schema }) as unknown as DB;
+        // One transaction: an interrupted first boot (e.g. a function timeout) rolls back
+        // completely and the next request seeds again from scratch.
         await syncRecordTypes(clientDb);
         await seedIfEmpty(clientDb);
         await client.query("COMMIT");
@@ -38,7 +41,6 @@ async function connect(): Promise<DB> {
         throw e;
       }
     } finally {
-      await client.query("SELECT pg_advisory_unlock(73191)").catch(() => {});
       client.release();
     }
     holder.mode = "postgres";
