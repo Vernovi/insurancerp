@@ -6,6 +6,8 @@ import { eq } from "drizzle-orm";
 import { getDb, schema } from "../db";
 import { readSession, SESSION_COOKIE } from "./session";
 import type { Role } from "../defs/types";
+import { mfaMandatory } from "./totp";
+import { deniedEntities } from "../engine/permissions";
 
 export interface SessionUser {
   id: number;
@@ -15,6 +17,11 @@ export interface SessionUser {
   roles: Role[];
   orgUnitId: number | null;
   managerId: number | null;
+  entityIds: number[];
+  /** Walled entities this person has no access to. */
+  deniedEntities: number[];
+  lineOfDefence: string | null;
+  mfaEnabled: boolean;
 }
 
 export const getCurrentUser = cache(async (): Promise<SessionUser | null> => {
@@ -23,7 +30,11 @@ export const getCurrentUser = cache(async (): Promise<SessionUser | null> => {
   if (!s) return null;
   const db = await getDb();
   const [u] = await db.select().from(schema.users).where(eq(schema.users.id, s.uid));
-  if (!u || !u.active) return null;
+  if (!u || !u.active || u.email !== s.em) return null;
+  // A session issued without a second factor stops working once MFA becomes mandatory.
+  if (mfaMandatory({ roles: (u.roles ?? []) as string[], mfaRequired: u.mfaRequired }) && !s.mfa) return null;
+  const entityIds = ((u.entityIds ?? []) as number[]).map(Number);
+  const walled = await db.select({ id: schema.entities.id }).from(schema.entities).where(eq(schema.entities.walled, true));
   return {
     id: u.id,
     name: u.name,
@@ -32,6 +43,10 @@ export const getCurrentUser = cache(async (): Promise<SessionUser | null> => {
     roles: (u.roles ?? []) as Role[],
     orgUnitId: u.orgUnitId,
     managerId: u.managerId,
+    entityIds,
+    deniedEntities: deniedEntities(walled.map((w) => w.id), entityIds),
+    lineOfDefence: u.lineOfDefence,
+    mfaEnabled: u.mfaEnabled,
   };
 });
 

@@ -7,7 +7,9 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { createHash, randomBytes } from "node:crypto";
 import { getDb, schema } from "@/lib/db";
 import { getCurrentUser, requireUser, hasRole } from "@/lib/auth/current";
-import { signSession, SESSION_COOKIE, SESSION_MAX_AGE } from "@/lib/auth/session";
+import { signSession, signPending, readPending, SESSION_COOKIE, SESSION_MAX_AGE, MFA_COOKIE, MFA_MAX_AGE } from "@/lib/auth/session";
+import { mfaMandatory, newSecret, verifyTotp } from "@/lib/auth/totp";
+import { ENTITY_COOKIE } from "@/lib/scope";
 import { hashPassword, verifyPassword } from "@/lib/auth/password";
 import {
   addComment,
@@ -57,39 +59,131 @@ const intOrNull = (v: FormDataEntryValue | null) => (v && String(v).trim() ? Num
 // ---------------------------------------------------------------------------
 
 const attempts = new Map<string, { n: number; at: number }>();
+const LOCK_AFTER = 5;
+const LOCK_MS = 15 * 60_000;
+
+function locked(key: string): boolean {
+  const a = attempts.get(key);
+  return !!a && a.n >= LOCK_AFTER && Date.now() - a.at < LOCK_MS;
+}
+function strike(key: string) {
+  const a = attempts.get(key);
+  attempts.set(key, { n: (a && Date.now() - a.at < LOCK_MS ? a.n : 0) + 1, at: Date.now() });
+}
+const safeNext = (v: unknown) => {
+  const n = String(v ?? "/");
+  return n.startsWith("/") && !n.startsWith("//") && !n.startsWith("/login") ? n : "/";
+};
+const cookieOpts = (maxAge: number) => ({ httpOnly: true, sameSite: "lax" as const, secure: process.env.NODE_ENV === "production", path: "/", maxAge });
+
+async function startFullSession(u: { id: number; email: string }, mfa: boolean) {
+  const jar = await cookies();
+  jar.set(SESSION_COOKIE, await signSession(u.id, u.email, mfa), cookieOpts(SESSION_MAX_AGE));
+  jar.delete(MFA_COOKIE);
+}
 
 export async function login(_: ActionState, fd: FormData): Promise<ActionState> {
   const email = String(fd.get("email") ?? "").trim().toLowerCase();
   const password = String(fd.get("password") ?? "");
   const ip = (await headers()).get("x-forwarded-for")?.split(",")[0] ?? "local";
   const key = `${ip}:${email}`;
-  const a = attempts.get(key);
-  if (a && a.n >= 5 && Date.now() - a.at < 15 * 60_000) return { error: "Too many attempts. Wait 15 minutes and try again." };
+  if (locked(key)) return { error: "Too many attempts. Wait 15 minutes and try again." };
   const db = await getDb();
   const [u] = await db.select().from(schema.users).where(eq(schema.users.email, email));
   if (!u || !u.active || !verifyPassword(password, u.passwordHash)) {
-    attempts.set(key, { n: (a?.n ?? 0) + 1, at: Date.now() });
+    strike(key);
     await audit(db, u?.id ?? null, "login_failed", null, { email });
     return { error: "That email and password don't match an active account." };
   }
   attempts.delete(key);
-  const jar = await cookies();
-  jar.set(SESSION_COOKIE, await signSession(u.id), {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
-    maxAge: SESSION_MAX_AGE,
-  });
+  const next = safeNext(fd.get("next"));
+  const mandatory = mfaMandatory({ roles: (u.roles ?? []) as string[], mfaRequired: u.mfaRequired });
+  if ((u.mfaEnabled && u.totpSecret) || mandatory) {
+    const stage = u.mfaEnabled && u.totpSecret ? "verify" : "enrol";
+    if (stage === "enrol") await db.update(schema.users).set({ totpSecret: newSecret(), mfaEnabled: false, mfaLastStep: null }).where(eq(schema.users.id, u.id));
+    (await cookies()).set(MFA_COOKIE, await signPending(u.id, u.email, stage, next), cookieOpts(MFA_MAX_AGE));
+    await audit(db, u.id, "login_password_ok", null, { mfa: stage });
+    redirect("/login/mfa");
+  }
+  await startFullSession(u, false);
   await audit(db, u.id, "login", null);
-  const next = String(fd.get("next") ?? "/");
-  redirect(next.startsWith("/") && !next.startsWith("//") ? next : "/");
+  redirect(next);
+}
+
+/** Second step of sign-in: verify (or, for a first sign-in where MFA is required, enrol) an authenticator code. */
+export async function verifyMfaLogin(_: ActionState, fd: FormData): Promise<ActionState> {
+  const pending = await readPending((await cookies()).get(MFA_COOKIE)?.value);
+  if (!pending) return { error: "Your sign-in has expired. Start again from the sign-in page." };
+  const key = `mfa:${pending.uid}`;
+  if (locked(key)) return { error: "Too many wrong codes. Wait 15 minutes and sign in again." };
+  const db = await getDb();
+  const [u] = await db.select().from(schema.users).where(eq(schema.users.id, pending.uid));
+  if (!u || !u.active || u.email !== pending.em || !u.totpSecret) return { error: "Your sign-in has expired. Start again from the sign-in page." };
+  if (pending.stage === "verify" && !u.mfaEnabled) return { error: "Your sign-in has expired. Start again from the sign-in page." };
+  const step = verifyTotp(u.totpSecret, String(fd.get("code") ?? ""), Date.now(), u.mfaLastStep ?? null);
+  if (step === null) {
+    strike(key);
+    await audit(db, u.id, "mfa_failed", null);
+    return { error: "That code didn't work. Check your authenticator app shows the code for this account and try the newest one." };
+  }
+  attempts.delete(key);
+  await db.update(schema.users).set({ mfaLastStep: step, mfaEnabled: true }).where(eq(schema.users.id, u.id));
+  if (pending.stage === "enrol") await audit(db, u.id, "mfa_enrolled", null);
+  await startFullSession(u, true);
+  await audit(db, u.id, "login", null, { mfa: true });
+  redirect(pending.next);
+}
+
+/** Start authenticator set-up from the person's own page. */
+export async function startMfaSetup(): Promise<void> {
+  const u = await requireUser();
+  const db = await getDb();
+  await db.update(schema.users).set({ totpSecret: newSecret(), mfaEnabled: false, mfaLastStep: null }).where(eq(schema.users.id, u.id));
+  await audit(db, u.id, "mfa_setup_started", null);
+  revalidatePath("/account");
+}
+
+export async function confirmMfaSetup(_: ActionState, fd: FormData): Promise<ActionState> {
+  const user = await requireUser();
+  const db = await getDb();
+  const [u] = await db.select().from(schema.users).where(eq(schema.users.id, user.id));
+  if (!u?.totpSecret) return { error: "Start set-up first." };
+  const step = verifyTotp(u.totpSecret, String(fd.get("code") ?? ""), Date.now(), u.mfaLastStep ?? null);
+  if (step === null) return { error: "That code didn't work. Enter the 6-digit code your app shows now." };
+  await db.update(schema.users).set({ mfaEnabled: true, mfaLastStep: step }).where(eq(schema.users.id, u.id));
+  await startFullSession(u, true);
+  await audit(db, u.id, "mfa_enrolled", null);
+  revalidatePath("/account");
+  return { ok: "Two-step sign-in is on. You'll be asked for a code each time you sign in." };
+}
+
+export async function disableOwnMfa(): Promise<void> {
+  const user = await requireUser();
+  const db = await getDb();
+  const [u] = await db.select().from(schema.users).where(eq(schema.users.id, user.id));
+  if (!u || mfaMandatory({ roles: (u.roles ?? []) as string[], mfaRequired: u.mfaRequired })) return;
+  await db.update(schema.users).set({ mfaEnabled: false, totpSecret: null, mfaLastStep: null }).where(eq(schema.users.id, u.id));
+  await audit(db, u.id, "mfa_disabled", null);
+  revalidatePath("/account");
+}
+
+/** Choose the entity the dashboards and registers are filtered to ("" for the whole group). */
+export async function setEntityScope(fd: FormData) {
+  await requireUser();
+  const id = String(fd.get("entity") ?? "");
+  const jar = await cookies();
+  if (id) jar.set(ENTITY_COOKIE, id, { ...cookieOpts(60 * 60 * 24 * 30), httpOnly: false });
+  else jar.delete(ENTITY_COOKIE);
+  revalidatePath("/", "layout");
+  redirect(safeNext(fd.get("next")));
 }
 
 export async function logout() {
   const u = await getCurrentUser();
   if (u) await audit(await getDb(), u.id, "logout", null);
-  (await cookies()).delete(SESSION_COOKIE);
+  const jar = await cookies();
+  jar.delete(SESSION_COOKIE);
+  jar.delete(MFA_COOKIE);
   redirect("/login");
 }
 
@@ -109,6 +203,7 @@ export async function createRecordAction(_: ActionState, fd: FormData): Promise<
       title: String(fd.get("__title") ?? ""),
       ownerId: intOrNull(fd.get("__owner")) ?? user.id,
       orgUnitId: intOrNull(fd.get("__orgUnit")),
+      entityId: intOrNull(fd.get("__entity")),
       raw: rawFromForm(def, fd),
       linkTo: linkId ? { id: linkId, kind: String(fd.get("__linkKind") || "related") } : undefined,
     });
@@ -131,6 +226,7 @@ export async function updateRecordAction(_: ActionState, fd: FormData): Promise<
       title: String(fd.get("__title") ?? ""),
       ownerId: intOrNull(fd.get("__owner")),
       orgUnitId: intOrNull(fd.get("__orgUnit")),
+      entityId: fd.has("__entity") ? intOrNull(fd.get("__entity")) : undefined,
       raw: rawFromForm(def, fd),
     });
   } catch (e) {
@@ -267,7 +363,9 @@ export async function createSnapshot(_: ActionState, fd: FormData): Promise<Acti
   const rows = await db.select().from(schema.records).where(inArray(schema.records.typeKey, ["risk", "kri", "action", "appetite", "objective", "loss_event", "emerging_risk"]));
   const users = await db.select({ id: schema.users.id, name: schema.users.name }).from(schema.users);
   const { boardKpis } = await import("@/lib/dashboard");
-  const kpis = await boardKpis();
+  const { getScope, inScope } = await import("@/lib/scope");
+  const scope = await getScope(user);
+  const kpis = await boardKpis(user, scope);
   const [s] = await db
     .insert(schema.snapshots)
     .values({
@@ -275,7 +373,8 @@ export async function createSnapshot(_: ActionState, fd: FormData): Promise<Acti
       periodEnd,
       createdBy: user.id,
       payload: {
-        records: rows.filter((r) => !r.confidential).map((r) => ({ id: r.id, typeKey: r.typeKey, ref: r.ref, title: r.title, status: r.status, ownerId: r.ownerId, data: r.data, dueDate: r.dueDate })),
+        records: rows.filter((r) => !r.confidential && inScope(r, scope, user)).map((r) => ({ id: r.id, typeKey: r.typeKey, ref: r.ref, title: r.title, status: r.status, ownerId: r.ownerId, entityId: r.entityId, data: r.data, dueDate: r.dueDate })),
+        entity: scope.selected ? { id: scope.selected.id, name: scope.selected.name } : null,
         users,
         kpis,
         takenAt: new Date().toISOString(),
@@ -306,7 +405,8 @@ export async function createUserAction(_: ActionState, fd: FormData): Promise<Ac
     if (!email.includes("@") || !name) return { error: "Enter a name and a valid email." };
     if (password.length < 12) return { error: "Passwords must be at least 12 characters." };
     const db = await getDb();
-    await db.insert(schema.users).values({ email, name, title: String(fd.get("title") ?? "") || null, passwordHash: hashPassword(password), roles: roles.length ? roles : ["staff"], orgUnitId: intOrNull(fd.get("orgUnit")), managerId: intOrNull(fd.get("manager")) });
+    const entityIds = fd.getAll("entities").map(Number).filter(Number.isFinite);
+    await db.insert(schema.users).values({ email, name, title: String(fd.get("title") ?? "") || null, passwordHash: hashPassword(password), roles: roles.length ? roles : ["staff"], orgUnitId: intOrNull(fd.get("orgUnit")), managerId: intOrNull(fd.get("manager")), entityIds, lineOfDefence: String(fd.get("lod") ?? "") || null, mfaRequired: fd.get("mfaRequired") === "on" });
     await audit(db, admin.id, "user_create", null, { email, roles });
     revalidatePath("/admin");
     return { ok: `Created ${name}.` };
@@ -324,13 +424,18 @@ export async function updateUserAction(_: ActionState, fd: FormData): Promise<Ac
     const active = fd.get("active") === "on";
     if (id === admin.id && (!roles.includes("admin") || !active)) return { error: "You can't remove your own administrator access." };
     const db = await getDb();
-    await db.update(schema.users).set({ roles, active }).where(eq(schema.users.id, id));
+    const entityIds = fd.getAll("entities").map(Number).filter(Number.isFinite);
+    const mfaRequired = fd.get("mfaRequired") === "on";
+    const resetMfa = fd.get("resetMfa") === "on";
+    if (resetMfa && id === admin.id) return { error: "Ask another administrator to reset your own two-step sign-in." };
+    await db.update(schema.users).set({ roles, active, entityIds, lineOfDefence: String(fd.get("lod") ?? "") || null, mfaRequired }).where(eq(schema.users.id, id));
+    if (resetMfa) await db.update(schema.users).set({ totpSecret: null, mfaEnabled: false, mfaLastStep: null }).where(eq(schema.users.id, id));
     const pw = String(fd.get("password") ?? "");
     if (pw) {
       if (pw.length < 12) return { error: "Passwords must be at least 12 characters." };
       await db.update(schema.users).set({ passwordHash: hashPassword(pw) }).where(eq(schema.users.id, id));
     }
-    await audit(db, admin.id, "user_update", null, { id, roles, active, passwordReset: !!pw });
+    await audit(db, admin.id, "user_update", null, { id, roles, active, entityIds, mfaRequired, mfaReset: resetMfa, passwordReset: !!pw });
     revalidatePath("/admin");
     return { ok: "Saved." };
   } catch (e) {
@@ -465,4 +570,22 @@ export async function portalMessage(_: ActionState, fd: FormData): Promise<Actio
 export async function typesForCreate() {
   const u = await requireUser();
   return (await loadTypes()).filter((t) => !t.createRoles || t.createRoles.some((r) => hasRole(u, r)));
+}
+
+export async function saveEntityAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  try {
+    const admin = await requireAdmin();
+    const id = Number(fd.get("id"));
+    const list = (k: string) => String(fd.get(k) ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+    const db = await getDb();
+    await db
+      .update(schema.entities)
+      .set({ name: String(fd.get("name") ?? "").trim() || undefined, licence: String(fd.get("licence") ?? "") || null, regulators: list("regulators"), frameworks: list("frameworks"), walled: fd.get("walled") === "on" })
+      .where(eq(schema.entities.id, id));
+    await audit(db, admin.id, "entity_update", null, { id, walled: fd.get("walled") === "on" });
+    revalidatePath("/", "layout");
+    return { ok: "Entity saved." };
+  } catch (e) {
+    return fail(e);
+  }
 }
