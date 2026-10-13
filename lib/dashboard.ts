@@ -1,6 +1,8 @@
 import "server-only";
 import { getDb, schema } from "./db";
-import { today } from "./engine/pure";
+import { today, claimsAgeing, filingStatus } from "./engine/pure";
+import type { PermUser } from "./engine/permissions";
+import { inScope, loadEntities, type Scope } from "./scope";
 
 type Row = typeof schema.records.$inferSelect;
 export type KpiStatus = "good" | "warn" | "bad" | "info";
@@ -18,9 +20,9 @@ export interface Kpi {
 const pct = (a: number, b: number) => (b === 0 ? null : Math.round((a / b) * 100));
 
 /** Board and Risk Committee KPI set (PRD section 15.1). Aggregates only, so confidential counts never expose content. */
-export async function boardKpis(): Promise<Kpi[]> {
+export async function boardKpis(user: PermUser, scope: Scope): Promise<Kpi[]> {
   const db = await getDb();
-  const all = await db.select().from(schema.records);
+  const all = (await db.select().from(schema.records)).filter((r) => inScope(r, scope, user));
   const t = today();
   const of = (k: string) => all.filter((r) => r.typeKey === k);
   const dget = (r: Row, k: string) => (r.data as Record<string, unknown>)[k];
@@ -54,10 +56,18 @@ export async function boardKpis(): Promise<Kpi[]> {
   const compliant = obls.filter((r) => dget(r, "compliance_status") === "Compliant").length;
   const cp = pct(compliant, obls.length) ?? 0;
   k.push({ label: "Obligations fully compliant", module: "Compliance", value: `${cp}%`, detail: `${compliant} of ${obls.length} obligations`, threshold: "Red below 85%", status: cp < 85 ? "bad" : cp < 95 ? "warn" : "good", href: "/r/obligation" });
-  const returns = of("reg_return");
+  const returns = [...of("reg_return"), ...of("outsourcing_notice")];
   const lateReturns = returns.filter((r) => r.status !== "submitted" && r.dueDate && r.dueDate < t).length;
   const dueSoon = returns.filter((r) => r.status !== "submitted" && r.dueDate && r.dueDate >= t && r.dueDate <= addDaysIso(t, 14)).length;
-  k.push({ label: "Regulatory returns late", module: "Compliance", value: String(lateReturns), detail: `${dueSoon} due in the next 14 days`, threshold: "Red if any", status: lateReturns ? "bad" : dueSoon ? "warn" : "good", href: "/r/reg_return?open=1" });
+  k.push({ label: "Regulatory filings overdue", module: "Compliance", value: String(lateReturns), detail: `${dueSoon} due in the next 14 days`, threshold: "Red if any", status: lateReturns ? "bad" : dueSoon ? "warn" : "good", href: "/calendar" });
+  const filedThisYear = returns.filter((r) => r.status === "submitted" && String(dget(r, "submitted_date") ?? "").startsWith(t.slice(0, 4)));
+  const onTime = filedThisYear.filter((r) => filingStatus(String(dget(r, "due_date") ?? ""), String(dget(r, "submitted_date") ?? "")) === "Filed on time").length;
+  const otp = pct(onTime, filedThisYear.length);
+  k.push({ label: "Filings on time this year", module: "Compliance", value: otp === null ? "None filed" : `${otp}%`, detail: `${onTime} of ${filedThisYear.length} returns filed by their due date`, threshold: "Red below 100%", status: otp === null ? "info" : otp < 100 ? "bad" : "good", href: "/calendar?view=filed" });
+  const prud = [...of("orsa"), ...of("rm_declaration")].filter((r) => r.status !== "submitted");
+  const prudLate = prud.filter((r) => r.dueDate && r.dueDate < t).length;
+  const prudSoon = prud.filter((r) => r.dueDate && r.dueDate >= t && r.dueDate <= addDaysIso(t, 90)).length;
+  k.push({ label: "ORSA and Risk Management Declarations", module: "ORSA and declarations", value: prudLate ? `${prudLate} overdue` : `${prud.length} open`, detail: `${prudSoon} due in the next 90 days`, threshold: "Red if any overdue", status: prudLate ? "bad" : prudSoon ? "warn" : "good", href: "/m/prudential" });
 
   const actions = of("action").filter((r) => !["closed", "cancelled"].includes(r.status));
   const overdueActions = actions.filter((r) => r.dueDate && r.dueDate < t);
@@ -83,12 +93,21 @@ export async function boardKpis(): Promise<Kpi[]> {
   const drafts = decls.filter((r) => r.status === "draft").length;
   k.push({ label: "Declarations awaiting review", module: "Declarations", value: String(pendingDecl), detail: `${drafts} not yet submitted`, threshold: "Amber if any", status: pendingDecl ? "warn" : "good", href: "/r/declaration?open=1" });
 
+  const capital = of("kri").filter((r) => r.status === "active" && dget(r, "kri_kind") === "Capital vs requirement");
+  if (capital.length) {
+    const worst = [...capital].sort((a, b) => Number(dget(a, "latest_ratio") ?? 0) - Number(dget(b, "latest_ratio") ?? 0))[0];
+    const st = String(dget(worst, "kri_status"));
+    k.push({ label: "Capital against minimum requirement", module: "Enterprise risk", value: dget(worst, "latest_ratio") === null || dget(worst, "latest_ratio") === undefined ? "No data" : `${dget(worst, "latest_ratio")}%`, detail: `${worst.title}; lowest of ${capital.length}`, threshold: "Red below 100%, amber inside the buffer", status: st === "Red" ? "bad" : st === "Amber" ? "warn" : st === "Green" ? "good" : "info", href: `/records/${worst.id}` });
+  }
+  const ageing = claimsAgeing(of("case").map((r) => ({ caseType: String(dget(r, "case_type") ?? ""), reportedDate: (dget(r, "reported_date") as string) ?? null, open: r.status !== "closed" })), t);
+  k.push({ label: "Open claims past the 60-day clock", module: "Cases", value: String(ageing.late), detail: `${ageing.open} open claims awaiting settlement or decision (NIIRA 2025 s.210)`, threshold: "Red if any", status: ageing.late ? "bad" : "good", href: "/r/case?field=case_type&value=Claim%20awaiting%20settlement%20or%20decision&overdue=1" });
+
   const cases = of("case").filter((r) => r.status !== "closed");
   const breached = cases.filter((r) => r.dueDate && r.dueDate < t).length;
   k.push({ label: "Open cases past their clock", module: "Cases", value: String(breached), detail: `${cases.length} open cases`, threshold: "Red if any regulatory clock breached", status: breached ? "bad" : "good", href: "/r/case?overdue=1" });
   const saved = of("case").reduce((s, r) => s + (Number(dget(r, "amount_saved")) || 0), 0);
   const yearStart = `${t.slice(0, 4)}-01-01`;
-  const losses = of("loss_event").filter((r) => String(dget(r, "event_date") ?? "") >= yearStart).reduce((s, r) => s + (Number(dget(r, "net_loss")) || 0), 0);
+  const losses = of("loss_event").filter((r) => String(dget(r, "event_date") ?? "") >= yearStart && dget(r, "event_source") !== "External loss (industry or peer)").reduce((s, r) => s + (Number(dget(r, "net_loss_ngn")) || 0), 0);
   k.push({ label: "Net operational losses this year", module: "Cases and ERM", value: naira(losses), detail: `${naira(saved)} saved or recovered by investigations`, threshold: "Trend", status: "info", href: "/r/loss_event" });
 
   const esg = of("esg_metric").filter((r) => r.status === "active");
@@ -131,4 +150,48 @@ function addDaysIso(iso: string, days: number) {
 function naira(n: number) {
   if (Math.abs(n) >= 1e6) return `₦${(n / 1e6).toFixed(1)}m`;
   return `₦${Math.round(n).toLocaleString("en-NG")}`;
+}
+
+export interface EntityRow {
+  id: number;
+  code: string;
+  name: string;
+  regulators: string[];
+  walled: boolean;
+  risks: number;
+  outside: number;
+  redKris: number;
+  overdueFilings: number;
+  casesPastClock: number;
+  capital: string | null;
+  capitalStatus: string | null;
+}
+
+/** Group roll-up: one row per entity the person can see. */
+export async function entityRollup(user: PermUser, scope: Scope): Promise<EntityRow[]> {
+  const db = await getDb();
+  const all = (await db.select().from(schema.records)).filter((r) => inScope(r, { ...scope, selected: null, ids: null }, user));
+  const t = today();
+  const dget = (r: Row, k: string) => (r.data as Record<string, unknown>)[k];
+  const ents = (await loadEntities()).filter((e) => scope.visible.some((v) => v.id === e.id));
+  return ents.map((e) => {
+    const mine = all.filter((r) => r.entityId === e.id);
+    const of = (k: string) => mine.filter((r) => r.typeKey === k);
+    const risks = of("risk").filter((r) => r.status === "active");
+    const cap = of("kri").find((r) => r.status === "active" && dget(r, "kri_kind") === "Capital vs requirement");
+    return {
+      id: e.id,
+      code: e.code,
+      name: e.name,
+      regulators: (e.regulators ?? []) as string[],
+      walled: e.walled,
+      risks: risks.length,
+      outside: risks.filter((r) => dget(r, "appetite_status") === "Outside appetite").length,
+      redKris: of("kri").filter((r) => r.status === "active" && dget(r, "kri_status") === "Red").length,
+      overdueFilings: [...of("reg_return"), ...of("outsourcing_notice"), ...of("orsa"), ...of("rm_declaration")].filter((r) => r.status !== "submitted" && r.dueDate && r.dueDate < t).length,
+      casesPastClock: of("case").filter((r) => r.status !== "closed" && r.dueDate && r.dueDate < t).length,
+      capital: cap && dget(cap, "latest_ratio") !== null && dget(cap, "latest_ratio") !== undefined ? `${dget(cap, "latest_ratio")}%` : null,
+      capitalStatus: cap ? String(dget(cap, "kri_status")) : null,
+    };
+  });
 }

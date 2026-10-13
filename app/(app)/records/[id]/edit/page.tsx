@@ -4,6 +4,7 @@ import { requireUser } from "@/lib/auth/current";
 import { getRecordForUser, canEdit } from "@/lib/engine/records";
 import { loadUsers, loadOrgUnits } from "@/lib/lookups";
 import RecordForm from "@/components/RecordForm";
+import { getScope } from "@/lib/scope";
 import { updateRecordAction } from "@/app/actions";
 
 export default async function EditRecord({ params }: { params: Promise<{ id: string }> }) {
@@ -15,7 +16,7 @@ export default async function EditRecord({ params }: { params: Promise<{ id: str
   if (!canEdit(user, def, r)) {
     return <p className="rounded-md bg-warn-soft p-4 text-warn">You can view this record but not edit it. The owner or the {def.label.toLowerCase()} team can.</p>;
   }
-  const [users, units] = await Promise.all([loadUsers(), loadOrgUnits()]);
+  const [users, units, scope] = await Promise.all([loadUsers(), loadOrgUnits(), getScope(user)]);
   return (
     <div className="space-y-5">
       <header>
@@ -28,7 +29,8 @@ export default async function EditRecord({ params }: { params: Promise<{ id: str
         recordId={r.id}
         users={users.filter((u) => u.active || u.id === r.ownerId).map((u) => ({ id: u.id, name: u.name }))}
         units={units.map((u) => ({ id: u.id, name: u.name }))}
-        values={{ title: r.title, ownerId: r.ownerId, orgUnitId: r.orgUnitId, data: r.data as Record<string, unknown> }}
+        entities={scope.visible.map((e) => ({ id: e.id, name: e.name }))}
+        values={{ title: r.title, ownerId: r.ownerId, orgUnitId: r.orgUnitId, entityId: r.entityId, data: r.data as Record<string, unknown> }}
         submitLabel="Save changes"
         defaultOwner={user.id}
       />

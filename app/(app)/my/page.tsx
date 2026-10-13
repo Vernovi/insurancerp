@@ -7,6 +7,7 @@ import { canView } from "@/lib/engine/permissions";
 import { checkTransition } from "@/lib/engine/pure";
 import { userMap, unitMap } from "@/lib/lookups";
 import RecordTable from "@/components/RecordTable";
+import { entityMap } from "@/lib/scope";
 
 const APPROVAL_STATES = ["submitted", "pending_approval", "review", "ready_for_validation", "extension_requested", "compliance_review", "manager_review", "requested", "internal_review", "due_diligence", "planned", "prepared", "triaged", "reported", "findings", "in_preparation", "response_agreed"];
 
@@ -15,7 +16,7 @@ export default async function MyWork() {
   const db = await getDb();
   const types = await loadTypes();
   const defs = new Map(types.map((t) => [t.key, t]));
-  const [users, units] = await Promise.all([userMap(), unitMap()]);
+  const [users, units, ents] = await Promise.all([userMap(), unitMap(), entityMap()]);
   const finals = types.flatMap((t) => t.workflow.states.filter((s) => s.final).map((s) => s.key));
 
   const mine = await db.select().from(schema.records).where(and(eq(schema.records.ownerId, user.id), notInArray(schema.records.status, [...new Set(finals)])));
@@ -56,7 +57,7 @@ export default async function MyWork() {
         <section key={b.title}>
           <h2 className="text-base font-semibold">{b.title} <span className="font-normal text-ink-3">({b.rows.length})</span></h2>
           {b.note && <p className="text-sm text-ink-3">{b.note}</p>}
-          <div className="mt-2"><RecordTable rows={b.rows} users={users} units={units} defs={defs} showType empty={b.empty} /></div>
+          <div className="mt-2"><RecordTable rows={b.rows} users={users} units={units} entities={ents} defs={defs} showType empty={b.empty} /></div>
         </section>
       ))}
     </div>

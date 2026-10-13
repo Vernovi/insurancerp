@@ -20,6 +20,7 @@ export default function RecordForm({
   values,
   users,
   units,
+  entities,
   recordId,
   linkTo,
   submitLabel,
@@ -27,9 +28,10 @@ export default function RecordForm({
 }: {
   def: TypeDef;
   action: (s: ActionState, fd: FormData) => Promise<ActionState>;
-  values?: { title: string; ownerId: number | null; orgUnitId: number | null; data: Record<string, unknown> };
+  values?: { title: string; ownerId: number | null; orgUnitId: number | null; entityId?: number | null; data: Record<string, unknown> };
   users: Opt[];
   units: Opt[];
+  entities: Opt[];
   recordId?: number;
   linkTo?: { id: number; kind: string; label: string };
   submitLabel: string;
@@ -135,7 +137,7 @@ export default function RecordForm({
       )}
       <fieldset disabled={pending} className="space-y-6">
         <section className="rounded-md border border-line bg-surface p-5">
-          <div className="grid gap-4 md:grid-cols-[2fr_1fr_1fr]">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-[2fr_1fr_1fr_1fr]">
             <label className="block">
               <span className="text-sm font-semibold">Title</span>
               <input name="__title" required defaultValue={values?.title ?? ""} className="field-input mt-1" />
@@ -145,6 +147,15 @@ export default function RecordForm({
               <select name="__owner" defaultValue={String(values?.ownerId ?? defaultOwner)} className="field-input mt-1">
                 {users.map((u) => (
                   <option key={u.id} value={u.id}>{u.name}</option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="text-sm font-semibold">Entity</span>
+              <select name="__entity" defaultValue={values?.entityId ? String(values.entityId) : ""} className="field-input mt-1">
+                <option value="">Group-wide (no entity)</option>
+                {entities.map((e) => (
+                  <option key={e.id} value={e.id}>{e.name}</option>
                 ))}
               </select>
             </label>

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { and, count, eq, lt, sql } from "drizzle-orm";
+import { and, count, eq, inArray, lt, sql } from "drizzle-orm";
 import { requireUser, hasRole } from "@/lib/auth/current";
 import { MODULES, type ModuleKey } from "@/lib/defs/types";
 import { typesForModule } from "@/lib/engine/registry";
@@ -8,7 +8,8 @@ import { canCreate } from "@/lib/engine/permissions";
 import { getDb, schema } from "@/lib/db";
 import { today } from "@/lib/engine/pure";
 import { riskViews } from "@/lib/riskviews";
-import { listRecords } from "@/lib/engine/records";
+import { listRecords, visibilityFilter } from "@/lib/engine/records";
+import { entityMap, getScope } from "@/lib/scope";
 import { userMap, unitMap } from "@/lib/lookups";
 import HeatMap from "@/components/HeatMap";
 import AppetiteStrip from "@/components/AppetiteStrip";
@@ -25,23 +26,26 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
   const types = await typesForModule(module as ModuleKey);
   const db = await getDb();
   const t = today();
+  const scope = await getScope(user);
+  const vis = await visibilityFilter(user);
+  const scoped = scope.ids ? and(vis, inArray(schema.records.entityId, scope.ids))! : vis;
   const counts = await Promise.all(
     types.map(async (def) => {
       const finals = def.workflow.states.filter((s) => s.final).map((s) => s.key);
       const notFinal = finals.length ? sql`${schema.records.status} not in (${sql.join(finals.map((f) => sql`${f}`), sql`, `)})` : sql`true`;
-      const [{ open }] = await db.select({ open: count() }).from(schema.records).where(and(eq(schema.records.typeKey, def.key), notFinal));
-      const [{ overdue }] = await db.select({ overdue: count() }).from(schema.records).where(and(eq(schema.records.typeKey, def.key), notFinal, lt(schema.records.dueDate, t)));
+      const [{ open }] = await db.select({ open: count() }).from(schema.records).where(and(eq(schema.records.typeKey, def.key), notFinal, scoped));
+      const [{ overdue }] = await db.select({ overdue: count() }).from(schema.records).where(and(eq(schema.records.typeKey, def.key), notFinal, scoped, lt(schema.records.dueDate, t)));
       return { def, open: Number(open), overdue: Number(overdue) };
     }),
   );
-  const [users, units] = await Promise.all([userMap(), unitMap()]);
+  const [users, units, ents] = await Promise.all([userMap(), unitMap(), entityMap()]);
 
   return (
     <div className="space-y-6">
       <header>
         <p className="text-sm text-ink-3">{mod.group}</p>
         <h1 className="text-2xl font-semibold tracking-tight">{mod.label}</h1>
-        <p className="mt-1 text-ink-2">{mod.summary}</p>
+        <p className="mt-1 text-ink-2">{mod.summary}{scope.selected ? `. Showing ${scope.selected.name}.` : ""}</p>
       </header>
 
       <section className="overflow-x-auto rounded-md border border-line bg-surface">
@@ -74,7 +78,7 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
         </table>
       </section>
 
-      {module === "erm" && <ErmPanel view={view} />}
+      {module === "erm" && <ErmPanel view={view} user={user} />}
       {module === "declarations" && hasRole(user, "compliance") && (
         <section className="rounded-md border border-line bg-surface p-5">
           <h2 className="text-base font-semibold">Annual declaration campaign</h2>
@@ -93,9 +97,10 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
           <h2 className="text-base font-semibold">Recently updated</h2>
           <div className="mt-3">
             <RecordTable
-              rows={await listRecords(user, types.filter((x) => !x.hidden).map((x) => x.key), { limit: 15 })}
+              rows={await listRecords(user, types.filter((x) => !x.hidden).map((x) => x.key), { limit: 15, entityIds: scope.ids })}
               users={users}
               units={units}
+              entities={ents}
               defs={new Map(types.map((x) => [x.key, x]))}
               showType
             />
@@ -106,8 +111,8 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
   );
 }
 
-async function ErmPanel({ view }: { view?: string }) {
-  const v = await riskViews();
+async function ErmPanel({ view, user }: { view?: string; user: Awaited<ReturnType<typeof requireUser>> }) {
+  const v = await riskViews(user, await getScope(user));
   const kind = view === "inherent" ? "inherent" : "residual";
   return (
     <>

@@ -50,7 +50,7 @@ export function displayValue(f: FieldDef, v: unknown, users: Map<number, string>
     case "orgunit":
       return units.get(Number(v)) ?? "";
     case "number":
-      return fmtNumber(v);
+      return /year/.test(f.key) ? String(v) : fmtNumber(v);
     case "computed":
       if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v)) return fmtDate(v);
       if (typeof v === "number") return fmtNumber(v);

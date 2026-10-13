@@ -7,6 +7,7 @@ import { listRecords } from "@/lib/engine/records";
 import { userMap, unitMap } from "@/lib/lookups";
 import { MODULES } from "@/lib/defs/types";
 import RecordTable from "@/components/RecordTable";
+import { entityMap, getScope } from "@/lib/scope";
 
 type SP = { status?: string; q?: string; mine?: string; overdue?: string; open?: string; field?: string; value?: string };
 
@@ -16,8 +17,9 @@ export default async function ListPage({ params, searchParams }: { params: Promi
   const sp = await searchParams;
   const def = await getTypeDef(type);
   if (!def) notFound();
-  const rows = await listRecords(user, type, { status: sp.status, q: sp.q, mine: sp.mine === "1", overdue: sp.overdue === "1", open: sp.open === "1", field: sp.field, value: sp.value });
-  const [users, units] = await Promise.all([userMap(), unitMap()]);
+  const scope = await getScope(user);
+  const rows = await listRecords(user, type, { status: sp.status, q: sp.q, mine: sp.mine === "1", overdue: sp.overdue === "1", open: sp.open === "1", field: sp.field, value: sp.value, entityIds: scope.ids });
+  const [users, units, ents] = await Promise.all([userMap(), unitMap(), entityMap()]);
   const mod = MODULES.find((m) => m.key === def.module)!;
   const qs = new URLSearchParams(Object.entries(sp).filter(([, v]) => v) as [string, string][]).toString();
   const filtered = Object.values(sp).some(Boolean);
@@ -57,12 +59,13 @@ export default async function ListPage({ params, searchParams }: { params: Promi
         {filtered && <Link href={`/r/${def.key}`} className="pb-2 text-accent hover:underline">Clear filters</Link>}
       </form>
       {sp.field && sp.value && <p className="text-sm text-ink-2">Showing records where {def.fields.find((f) => f.key === sp.field)?.label ?? sp.field} is &ldquo;{sp.value}&rdquo;.</p>}
-      <p className="text-sm text-ink-3">{rows.length} {rows.length === 1 ? "record" : "records"}</p>
+      <p className="text-sm text-ink-3">{rows.length} {rows.length === 1 ? "record" : "records"}{scope.selected ? ` in ${scope.selected.name}` : " across the group"}</p>
       <RecordTable
         def={def}
         rows={rows}
         users={users}
         units={units}
+        entities={ents}
         empty={filtered ? "No records match these filters." : canCreate(user, def) ? <>No {def.plural.toLowerCase()} yet. <Link className="text-accent underline" href={`/r/${def.key}/new`}>Create the first one</Link>.</> : "No records yet."}
       />
     </div>

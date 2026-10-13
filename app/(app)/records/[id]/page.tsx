@@ -13,6 +13,7 @@ import { Pill, Val } from "@/components/Pill";
 import TransitionBar, { type TransitionOption } from "@/components/TransitionBar";
 import ActionForm from "@/components/ActionForm";
 import TrendLine from "@/components/TrendLine";
+import { entityMap } from "@/lib/scope";
 import { commentAction, linkAction, readingAction, unlinkAction, launchAttestation } from "@/app/actions";
 
 export default async function RecordPage({ params }: { params: Promise<{ id: string }> }) {
@@ -25,6 +26,8 @@ export default async function RecordPage({ params }: { params: Promise<{ id: str
   const db = await getDb();
   const [types, users, units, links, comments, history] = await Promise.all([loadTypes(), userMap(), unitMap(), linkedRecords(db, r.id), recordComments(r.id), recordHistory(r.id)]);
   const typeMap = new Map(types.map((t) => [t.key, t]));
+  const ents = await entityMap();
+  const entity = r.entityId ? ents.get(r.entityId) : null;
   const editable = canEdit(user, def, r);
   const st = stateOf(def, r.status);
   const overdue = r.dueDate && r.dueDate < today() && !("final" in st && st.final);
@@ -64,6 +67,7 @@ export default async function RecordPage({ params }: { params: Promise<{ id: str
         <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-sm text-ink-2">
           <Pill label={st.label} tone={st.tone} />
           <span>Owner: <strong className="text-ink">{r.ownerId ? users.get(r.ownerId) : "Unassigned"}</strong></span>
+          <span>Entity: <strong className="text-ink">{entity ? entity.name : "Group-wide"}</strong>{entity?.walled ? " (walled)" : ""}</span>
           {r.orgUnitId && <span>{units.get(r.orgUnitId)}</span>}
           {r.dueDate && <span className={overdue ? "font-semibold text-bad" : ""}>{overdue ? "Overdue since" : "Due"} {fmtDate(r.dueDate)}</span>}
           {r.confidential && <Pill label="Confidential: views are logged" tone="warn" />}

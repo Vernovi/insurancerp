@@ -5,13 +5,14 @@ import { stateOf } from "@/lib/engine/registry";
 import { today } from "@/lib/engine/pure";
 import { Pill, Val } from "./Pill";
 
-type Row = { id: number; ref: string; title: string; status: string; ownerId: number | null; dueDate: string | null; data: unknown; typeKey: string };
+type Row = { id: number; ref: string; title: string; status: string; ownerId: number | null; dueDate: string | null; data: unknown; typeKey: string; entityId?: number | null };
 
 export default function RecordTable({
   def,
   rows,
   users,
   units,
+  entities,
   defs,
   showType = false,
   empty,
@@ -20,6 +21,7 @@ export default function RecordTable({
   rows: Row[];
   users: Map<number, string>;
   units: Map<number, string>;
+  entities?: Map<number, { code: string; name: string }>;
   defs?: Map<string, TypeDef>;
   showType?: boolean;
   empty?: React.ReactNode;
@@ -35,6 +37,7 @@ export default function RecordTable({
             <th scope="col">Ref</th>
             <th scope="col">Title</th>
             {showType && <th scope="col">Type</th>}
+            {entities && <th scope="col">Entity</th>}
             {cols.map((c) => (
               <th scope="col" key={c.key}>{c.label}</th>
             ))}
@@ -56,6 +59,7 @@ export default function RecordTable({
                   {overdue && <span className="ml-2 text-xs font-semibold text-bad">Overdue since {fmtDate(r.dueDate)}</span>}
                 </td>
                 {showType && <td className="whitespace-nowrap text-ink-2">{d?.label}</td>}
+                {entities && <td className="whitespace-nowrap text-ink-2" title={r.entityId ? entities.get(r.entityId)?.name : "Group-wide"}>{r.entityId ? entities.get(r.entityId)?.code : "Group"}</td>}
                 {cols.map((c) => (
                   <td key={c.key} className="whitespace-nowrap">
                     <Val v={displayValue(c, data[c.key], users, units)} />

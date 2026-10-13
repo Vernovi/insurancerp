@@ -3,7 +3,7 @@ import Link from "next/link";
 export interface StripRow {
   category: string;
   threshold: number | null;
-  risks: { id: number; ref: string; title: string; residual: number; target: number | null }[];
+  risks: { id: number; ref: string; title: string; residual: number; target: number | null; outside?: boolean }[];
 }
 
 const pos = (s: number) => `${((s - 1) / 24) * 100}%`;
@@ -22,7 +22,7 @@ export default function AppetiteStrip({ rows }: { rows: StripRow[] }) {
       </div>
       {rows.map((row) => {
         const th = row.threshold;
-        const outside = th !== null ? row.risks.filter((r) => r.residual > th).length : 0;
+        const outside = row.risks.filter((r) => r.outside ?? (th !== null && r.residual > th)).length;
         const seen = new Map<number, number>();
         return (
           <div key={row.category} className="grid grid-cols-1 sm:grid-cols-[11rem_1fr] items-center gap-x-3 gap-y-1 pb-2 sm:pb-0">
@@ -45,7 +45,7 @@ export default function AppetiteStrip({ rows }: { rows: StripRow[] }) {
               {row.risks.map((r) => {
                 const n = seen.get(r.residual) ?? 0;
                 seen.set(r.residual, n + 1);
-                const out = th !== null && r.residual > th;
+                const out = r.outside ?? (th !== null && r.residual > th);
                 return (
                   <Link
                     key={r.id}
@@ -62,7 +62,7 @@ export default function AppetiteStrip({ rows }: { rows: StripRow[] }) {
           </div>
         );
       })}
-      <p className="pt-1 text-xs text-ink-3">Each mark is a risk at its residual score. The black rule is the approved appetite for that category; marks past it are outside appetite.</p>
+      <p className="pt-1 text-xs text-ink-3">Each mark is a risk at its residual score. The black rule is the approved appetite for that category; crimson marks are outside appetite (an entity&apos;s own appetite applies where it has one).</p>
     </div>
   );
 }

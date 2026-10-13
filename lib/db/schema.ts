@@ -17,7 +17,31 @@ export const users = pgTable("users", {
   orgUnitId: integer("org_unit_id"),
   managerId: integer("manager_id"),
   active: boolean("active").notNull().default(true),
+  /** Entities whose walled data this person may see (and their default entity first). */
+  entityIds: jsonb("entity_ids").$type<number[]>().notNull().default([]),
+  lineOfDefence: text("line_of_defence"),
+  totpSecret: text("totp_secret"),
+  mfaEnabled: boolean("mfa_enabled").notNull().default(false),
+  mfaRequired: boolean("mfa_required").notNull().default(false),
+  mfaLastStep: integer("mfa_last_step"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const entities = pgTable("entities", {
+  id: serial("id").primaryKey(),
+  code: text("code").notNull().unique(),
+  name: text("name").notNull(),
+  kind: text("kind").notNull().default("subsidiary"),
+  parentId: integer("parent_id"),
+  business: text("business"),
+  licence: text("licence"),
+  regulators: jsonb("regulators").$type<string[]>().notNull().default([]),
+  frameworks: jsonb("frameworks").$type<string[]>().notNull().default([]),
+  /** Walled entities' records are hidden from people without access to the entity. */
+  walled: boolean("walled").notNull().default(false),
+  insurer: boolean("insurer").notNull().default(false),
+  sort: integer("sort").notNull().default(0),
+  active: boolean("active").notNull().default(true),
 });
 
 export const recordTypes = pgTable("record_types", {
@@ -38,6 +62,7 @@ export const records = pgTable(
     status: text("status").notNull(),
     ownerId: integer("owner_id"),
     orgUnitId: integer("org_unit_id"),
+    entityId: integer("entity_id"),
     data: jsonb("data").$type<Record<string, unknown>>().notNull().default({}),
     dueDate: date("due_date"),
     confidential: boolean("confidential").notNull().default(false),
@@ -145,5 +170,14 @@ CREATE TABLE IF NOT EXISTS audit_log (id serial PRIMARY KEY, actor_id integer, a
 CREATE TABLE IF NOT EXISTS notifications (id serial PRIMARY KEY, user_id integer NOT NULL, record_id integer, message text NOT NULL, read boolean NOT NULL DEFAULT false, created_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS snapshots (id serial PRIMARY KEY, label text NOT NULL, period_end date NOT NULL, created_by integer, created_at timestamptz NOT NULL DEFAULT now(), payload jsonb NOT NULL);
 CREATE TABLE IF NOT EXISTS counters (type_key text PRIMARY KEY, n integer NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS entities (id serial PRIMARY KEY, code text NOT NULL UNIQUE, name text NOT NULL, kind text NOT NULL DEFAULT 'subsidiary', parent_id integer, business text, licence text, regulators jsonb NOT NULL DEFAULT '[]', frameworks jsonb NOT NULL DEFAULT '[]', walled boolean NOT NULL DEFAULT false, insurer boolean NOT NULL DEFAULT false, sort integer NOT NULL DEFAULT 0, active boolean NOT NULL DEFAULT true);
+ALTER TABLE records ADD COLUMN IF NOT EXISTS entity_id integer;
+CREATE INDEX IF NOT EXISTS records_entity_idx ON records (entity_id);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS entity_ids jsonb NOT NULL DEFAULT '[]';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS line_of_defence text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_enabled boolean NOT NULL DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_required boolean NOT NULL DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_last_step integer;
 CREATE TABLE IF NOT EXISTS api_tokens (id serial PRIMARY KEY, name text NOT NULL, token_hash text NOT NULL, created_by integer, created_at timestamptz NOT NULL DEFAULT now(), revoked boolean NOT NULL DEFAULT false);
 `;

@@ -10,15 +10,18 @@ import AppetiteStrip, { type StripRow } from "@/components/AppetiteStrip";
 import { Pill, Val } from "@/components/Pill";
 import PrintButton from "@/components/PrintButton";
 
-type SnapRec = { id: number; typeKey: string; ref: string; title: string; status: string; ownerId: number | null; data: Record<string, unknown>; dueDate: string | null };
+type SnapRec = { id: number; typeKey: string; ref: string; title: string; status: string; ownerId: number | null; entityId?: number | null; data: Record<string, unknown>; dueDate: string | null };
 
 export default async function Pack({ params }: { params: Promise<{ id: string }> }) {
-  await requireUser();
+  const user = await requireUser();
   const { id } = await params;
   const db = await getDb();
   const [s] = await db.select().from(schema.snapshots).where(eq(schema.snapshots.id, Number(id)));
   if (!s) notFound();
-  const p = s.payload as { records: SnapRec[]; users: { id: number; name: string }[]; kpis: Kpi[]; takenAt: string };
+  const raw = s.payload as { records: SnapRec[]; users: { id: number; name: string }[]; kpis: Kpi[]; takenAt: string; entity?: { id: number; name: string } | null };
+  // The entity wall applies to frozen packs too: a viewer never sees records of a walled entity they are not in.
+  if (raw.entity && user.deniedEntities.includes(raw.entity.id)) notFound();
+  const p = { ...raw, records: raw.records.filter((r) => !r.entityId || !user.deniedEntities.includes(r.entityId)) };
   const names = new Map(p.users.map((u) => [u.id, u.name]));
   const risks = p.records.filter((r) => r.typeKey === "risk" && r.status === "active");
   const appetite = p.records.filter((r) => r.typeKey === "appetite" && r.status === "approved");
@@ -31,7 +34,7 @@ export default async function Pack({ params }: { params: Promise<{ id: string }>
       const a = appetite.find((x) => x.data.category === c);
       return a ? Number(a.data.threshold) : null;
     })(),
-    risks: risks.filter((r) => r.data.category === c && typeof r.data.residual_score === "number").map((r) => ({ id: r.id, ref: r.ref, title: r.title, residual: r.data.residual_score as number, target: (r.data.target_score as number) ?? null })),
+    risks: risks.filter((r) => r.data.category === c && typeof r.data.residual_score === "number").map((r) => ({ id: r.id, ref: r.ref, title: r.title, residual: r.data.residual_score as number, target: (r.data.target_score as number) ?? null, outside: r.data.appetite_status === "Outside appetite" })),
   })).filter((r) => r.risks.length);
   const top = [...risks].sort((a, b) => Number(b.data.residual_score) - Number(a.data.residual_score)).slice(0, 10);
   const outside = risks.filter((r) => r.data.appetite_status === "Outside appetite");

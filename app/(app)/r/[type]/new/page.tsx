@@ -8,6 +8,7 @@ import { loadUsers, loadOrgUnits } from "@/lib/lookups";
 import RecordForm from "@/components/RecordForm";
 import { createRecordAction } from "@/app/actions";
 import { today } from "@/lib/engine/pure";
+import { getScope } from "@/lib/scope";
 
 export default async function NewRecord({ params, searchParams }: { params: Promise<{ type: string }>; searchParams: Promise<{ link?: string; kind?: string }> }) {
   const user = await requireUser();
@@ -18,12 +19,15 @@ export default async function NewRecord({ params, searchParams }: { params: Prom
   if (!canCreate(user, def)) {
     return <p className="rounded-md bg-warn-soft p-4 text-warn">Your role can&apos;t create {def.plural.toLowerCase()}. Ask an administrator if you need access.</p>;
   }
+  const scope = await getScope(user);
+  let entityId: number | null = scope.selected?.id ?? user.entityIds.find((id) => scope.visible.some((e) => e.id === id)) ?? null;
   let linkTo: { id: number; kind: string; label: string } | undefined;
   const defaults: Record<string, unknown> = {};
   if (sp.link) {
     const parent = await getRecordForUser(user, Number(sp.link));
     if (parent) {
       linkTo = { id: parent.record.id, kind: sp.kind ?? "related", label: `${parent.record.ref} ${parent.record.title}` };
+      if (parent.record.entityId) entityId = parent.record.entityId;
       const sourceMap: Record<string, string> = { risk: "Risk", control_test: "Control test", finding: parent.record.data && (parent.record.data as Record<string, unknown>).source === "Internal audit" ? "Internal audit finding" : "Control test", case: "Case", policy_exception: "Policy exception", reg_change: "Regulatory change", meeting: "Board decision", bc_exercise: "BCM exercise", third_party: "Third party" };
       if (type === "action" && sourceMap[parent.def.key]) defaults.source = sourceMap[parent.def.key];
       if (type === "risk" && parent.def.key === "policy_exception") defaults.category = "Compliance and conduct";
@@ -44,7 +48,8 @@ export default async function NewRecord({ params, searchParams }: { params: Prom
         action={createRecordAction}
         users={users.filter((u) => u.active).map((u) => ({ id: u.id, name: u.name }))}
         units={units.map((u) => ({ id: u.id, name: u.name }))}
-        values={{ title: "", ownerId: user.id, orgUnitId: user.orgUnitId, data: defaults }}
+        entities={scope.visible.map((e) => ({ id: e.id, name: e.name }))}
+        values={{ title: "", ownerId: user.id, orgUnitId: user.orgUnitId, entityId, data: defaults }}
         linkTo={linkTo}
         submitLabel={`Create ${def.label.toLowerCase()}`}
         defaultOwner={user.id}

@@ -4,11 +4,17 @@ import { getDb, schema } from "./db";
 import { RISK_CATEGORIES } from "./defs/modules";
 import type { StripRow } from "@/components/AppetiteStrip";
 import type { HeatRisk } from "@/components/HeatMap";
+import type { PermUser } from "./engine/permissions";
+import { inScope, loadEntities, type Scope } from "./scope";
 
-export async function riskViews() {
+export async function riskViews(user: PermUser, scope: Scope) {
   const db = await getDb();
-  const risks = await db.select().from(schema.records).where(and(eq(schema.records.typeKey, "risk"), inArray(schema.records.status, ["active", "submitted"])));
-  const appetites = await db.select().from(schema.records).where(and(eq(schema.records.typeKey, "appetite"), eq(schema.records.status, "approved")));
+  const risks = (await db.select().from(schema.records).where(and(eq(schema.records.typeKey, "risk"), inArray(schema.records.status, ["active", "submitted"])))).filter((r) => inScope(r, scope, user));
+  const allApps = await db.select().from(schema.records).where(and(eq(schema.records.typeKey, "appetite"), eq(schema.records.status, "approved")));
+  // With one entity selected, its own appetite wins over the group's; for the whole group, show group appetite.
+  const groupIds = new Set((await loadEntities()).filter((e) => e.kind === "group").map((e) => e.id));
+  const groupLevel = (a: (typeof allApps)[number]) => a.entityId === null || groupIds.has(a.entityId);
+  const appetites = scope.selected ? [...allApps.filter((a) => a.entityId === scope.selected!.id), ...allApps.filter(groupLevel)] : allApps.filter(groupLevel);
   const d = (r: (typeof risks)[number]) => r.data as Record<string, unknown>;
   const thresholdFor = (c: string) => {
     const a = appetites.find((x) => (x.data as Record<string, unknown>).category === c);
@@ -19,7 +25,7 @@ export async function riskViews() {
     threshold: thresholdFor(category),
     risks: risks
       .filter((r) => d(r).category === category && typeof d(r).residual_score === "number")
-      .map((r) => ({ id: r.id, ref: r.ref, title: r.title, residual: d(r).residual_score as number, target: (d(r).target_score as number) ?? null }))
+      .map((r) => ({ id: r.id, ref: r.ref, title: r.title, residual: d(r).residual_score as number, target: (d(r).target_score as number) ?? null, outside: d(r).appetite_status === "Outside appetite" }))
       .sort((a, b) => a.residual - b.residual),
   })).filter((row) => row.risks.length > 0 || row.threshold !== null);
   const heat = (kind: "residual" | "inherent"): HeatRisk[] =>

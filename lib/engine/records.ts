@@ -3,7 +3,7 @@ import { and, desc, eq, inArray, or, sql, type SQL } from "drizzle-orm";
 import { getDb, schema, type DB } from "../db";
 import type { TypeDef, Role } from "../defs/types";
 import { getTypeDef, loadTypes } from "./registry";
-import { canCreate, canEdit, canView, isConfidential, type PermUser } from "./permissions";
+import { canCreate, canEdit, canUseEntity, canView, isConfidential, type PermUser } from "./permissions";
 import { checkTransition, coerceFields, fieldVisible, today } from "./pure";
 import { after, compute, onTransition, type HookCtx, type HookRecord } from "./hooks";
 
@@ -20,6 +20,7 @@ function toHook(r: RecordRow): HookRecord {
     status: r.status,
     ownerId: r.ownerId,
     orgUnitId: r.orgUnitId,
+    entityId: r.entityId ?? null,
     createdBy: r.createdBy,
     data: (r.data ?? {}) as Record<string, unknown>,
   };
@@ -69,7 +70,7 @@ function makeCtx(db: DB, actorId: number | null, depth: number): HookCtx {
     actorId,
     async createRecord(typeKey, input, linkTo) {
       const def = await getTypeDefFromDb(db, typeKey);
-      const rec = await insertRecord(db, def, { ...input, orgUnitId: input.orgUnitId ?? null }, actorId, depth + 1, input.status);
+      const rec = await insertRecord(db, def, { ...input, orgUnitId: input.orgUnitId ?? null, entityId: input.entityId ?? null }, actorId, depth + 1, input.status);
       if (linkTo) await insertLink(db, linkTo.id, rec.id, linkTo.kind, actorId);
       return rec;
     },
@@ -117,13 +118,13 @@ async function insertLink(db: DB, fromId: number, toId: number, kind: string, ac
 async function insertRecord(
   db: DB,
   def: TypeDef,
-  input: { title: string; ownerId: number | null; orgUnitId: number | null; data: Record<string, unknown> },
+  input: { title: string; ownerId: number | null; orgUnitId: number | null; entityId?: number | null; data: Record<string, unknown> },
   actorId: number | null,
   depth: number,
   status?: string,
 ): Promise<HookRecord> {
   const ref = await nextRef(db, def);
-  const { data, dueDate } = await compute(def, input.data, { db });
+  const { data, dueDate } = await compute(def, input.data, { db, entityId: input.entityId ?? null });
   const [row] = await db
     .insert(schema.records)
     .values({
@@ -133,6 +134,7 @@ async function insertRecord(
       status: status ?? def.workflow.initial,
       ownerId: input.ownerId,
       orgUnitId: input.orgUnitId,
+      entityId: input.entityId ?? null,
       data,
       dueDate,
       confidential: isConfidential(def, data),
@@ -150,7 +152,7 @@ async function patchData(db: DB, id: number, patch: Record<string, unknown>, act
   if (!prev) return;
   const def = await getTypeDefFromDb(db, prev.typeKey);
   const merged = { ...(prev.data as Record<string, unknown>), ...patch };
-  const { data, dueDate } = await compute(def, merged, { db, createdAt: prev.createdAt });
+  const { data, dueDate } = await compute(def, merged, { db, createdAt: prev.createdAt, entityId: prev.entityId });
   const [row] = await db
     .update(schema.records)
     .set({ data, dueDate, updatedAt: new Date(), version: prev.version + 1, confidential: isConfidential(def, data) })
@@ -169,6 +171,8 @@ export interface RecordInput {
   title: string;
   ownerId: number | null;
   orgUnitId: number | null;
+  /** Legal entity the record belongs to; undefined keeps the current one on update. */
+  entityId?: number | null;
   raw: Record<string, unknown>;
   linkTo?: { id: number; kind: string };
 }
@@ -179,11 +183,12 @@ export async function createRecord(user: PermUser, typeKey: string, input: Recor
   if (!def) throw new EngineError("Unknown record type.");
   if (!canCreate(user, def)) throw new EngineError(`You don't have permission to create a ${def.label.toLowerCase()}.`);
   if (!input.title.trim()) throw new EngineError("Title is required.");
+  if (!canUseEntity(user, input.entityId)) throw new EngineError("You don't have access to that entity.");
   const { data, errors } = coerceFields(def.fields, input.raw);
   const missing = def.fields.filter((f) => f.required && !f.readOnly && fieldVisible(f, data) && f.type !== "checkbox" && (data[f.key] === null || data[f.key] === undefined || data[f.key] === ""));
   if (errors.length) throw new EngineError(errors.join(" "));
   if (missing.length) throw new EngineError(`Fill in: ${missing.map((f) => f.label).join(", ")}.`);
-  const rec = await insertRecord(db, def, { title: input.title, ownerId: input.ownerId, orgUnitId: input.orgUnitId, data }, user.id, 0);
+  const rec = await insertRecord(db, def, { title: input.title, ownerId: input.ownerId, orgUnitId: input.orgUnitId, entityId: input.entityId ?? null, data }, user.id, 0);
   if (input.linkTo) {
     const [target] = await db.select().from(schema.records).where(eq(schema.records.id, input.linkTo.id));
     if (target) await insertLink(db, input.linkTo.id, rec.id, input.linkTo.kind, user.id);
@@ -201,20 +206,24 @@ export async function updateRecord(user: PermUser, id: number, input: Omit<Recor
   const def = await getTypeDef(prev.typeKey);
   if (!def) throw new EngineError("Unknown record type.");
   if (!canEdit(user, def, prev)) throw new EngineError("You don't have permission to edit this record.");
+  const entityId = input.entityId === undefined ? prev.entityId : input.entityId;
+  if (entityId !== prev.entityId && !canUseEntity(user, entityId)) throw new EngineError("You don't have access to that entity.");
   const { data: coerced, errors } = coerceFields(def.fields, input.raw);
   if (errors.length) throw new EngineError(errors.join(" "));
   const merged = { ...(prev.data as Record<string, unknown>), ...coerced };
-  const { data, dueDate } = await compute(def, merged, { db, createdAt: prev.createdAt });
+  const { data, dueDate } = await compute(def, merged, { db, createdAt: prev.createdAt, entityId });
   const changed = Object.keys(coerced).filter((k) => JSON.stringify((prev.data as Record<string, unknown>)[k] ?? null) !== JSON.stringify(coerced[k] ?? null));
   if (prev.title !== input.title.trim()) changed.push("title");
   if (prev.ownerId !== input.ownerId) changed.push("owner");
   if (prev.orgUnitId !== input.orgUnitId) changed.push("org unit");
+  if (prev.entityId !== entityId) changed.push("entity");
   const [row] = await db
     .update(schema.records)
     .set({
       title: input.title.trim().slice(0, 300) || prev.title,
       ownerId: input.ownerId,
       orgUnitId: input.orgUnitId,
+      entityId,
       data,
       dueDate,
       confidential: isConfidential(def, data),
@@ -242,8 +251,8 @@ export async function transitionRecord(user: PermUser, id: number, key: string, 
   if (!t) throw new EngineError("Unknown action.");
   const err = checkTransition(def, { status: prev.status, ownerId: prev.ownerId, createdBy: prev.createdBy, data: prev.data as Record<string, unknown> }, t, user, comment, canEdit(user, def, prev));
   if (err) throw new EngineError(err);
-  const adj = onTransition(def, key, t.to, prev.data as Record<string, unknown>);
-  const { data, dueDate } = await compute(def, adj.data, { db, createdAt: prev.createdAt });
+  const adj = onTransition(def, key, t.to, prev.data as Record<string, unknown>, user.id);
+  const { data, dueDate } = await compute(def, adj.data, { db, createdAt: prev.createdAt, entityId: prev.entityId });
   const [row] = await db
     .update(schema.records)
     .set({ status: adj.to, data, dueDate, updatedAt: new Date(), version: prev.version + 1, confidential: isConfidential(def, data) })
@@ -333,13 +342,17 @@ export async function linkedRecords(db: DB, id: number, typeKey?: string) {
     .filter((x): x is NonNullable<typeof x> => !!x && (!typeKey || x.record.typeKey === typeKey));
 }
 
-/** SQL condition restricting confidential rows to people allowed to see them. */
+/** SQL condition applying the entity wall and the confidentiality wall (mirrors canView). */
 export async function visibilityFilter(user: PermUser): Promise<SQL> {
   const types = await loadTypes();
   const allowed = types.filter((t) => (t.confidential?.roles ?? []).some((r) => user.roles.includes(r))).map((t) => t.key);
-  const conds: SQL[] = [eq(schema.records.confidential, false), eq(schema.records.ownerId, user.id), eq(schema.records.createdBy, user.id)];
+  const mine = or(eq(schema.records.ownerId, user.id), eq(schema.records.createdBy, user.id))!;
+  const conds: SQL[] = [eq(schema.records.confidential, false), mine];
   if (allowed.length) conds.push(inArray(schema.records.typeKey, allowed));
-  return or(...conds)!;
+  const denied = user.deniedEntities ?? [];
+  if (denied.length === 0) return or(...conds)!;
+  const wall = or(sql`${schema.records.entityId} is null`, sql`${schema.records.entityId} not in (${sql.join(denied.map((d) => sql`${d}`), sql`, `)})`, mine)!;
+  return and(wall, or(...conds)!)!;
 }
 
 export interface ListFilters {
@@ -351,6 +364,8 @@ export interface ListFilters {
   field?: string;
   value?: string;
   limit?: number;
+  /** Restrict to these entities (the entity switcher). */
+  entityIds?: number[] | null;
 }
 
 export async function listRecords(user: PermUser, typeKey: string | string[], f: ListFilters = {}) {
@@ -360,6 +375,7 @@ export async function listRecords(user: PermUser, typeKey: string | string[], f:
   const conds: SQL[] = [inArray(schema.records.typeKey, keys), await visibilityFilter(user)];
   if (f.status) conds.push(eq(schema.records.status, f.status));
   if (f.mine) conds.push(eq(schema.records.ownerId, user.id));
+  if (f.entityIds && f.entityIds.length) conds.push(inArray(schema.records.entityId, f.entityIds));
   if (f.q) {
     const like = `%${f.q.toLowerCase()}%`;
     conds.push(sql`(lower(${schema.records.title}) like ${like} or lower(${schema.records.ref}) like ${like} or lower(${schema.records.data}::text) like ${like})`);
@@ -406,12 +422,12 @@ export { canCreate, canEdit, canView };
 export async function seedInsert(
   db: DB,
   typeKey: string,
-  input: { title: string; ownerId: number | null; orgUnitId?: number | null; data: Record<string, unknown> },
+  input: { title: string; ownerId: number | null; orgUnitId?: number | null; entityId?: number | null; data: Record<string, unknown> },
   actorId: number | null,
   status?: string,
 ): Promise<HookRecord> {
   const def = await getTypeDefFromDb(db, typeKey);
-  return insertRecord(db, def, { ...input, orgUnitId: input.orgUnitId ?? null }, actorId, 99, status);
+  return insertRecord(db, def, { ...input, orgUnitId: input.orgUnitId ?? null, entityId: input.entityId ?? null }, actorId, 99, status);
 }
 
 export async function seedLink(db: DB, fromId: number, toId: number, kind: string, actorId: number | null) {
