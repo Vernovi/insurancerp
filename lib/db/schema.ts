@@ -17,7 +17,7 @@ export const users = pgTable("users", {
   orgUnitId: integer("org_unit_id"),
   managerId: integer("manager_id"),
   active: boolean("active").notNull().default(true),
-  /** The entities this person may see (an allow-list). Empty means every entity except walled ones. */
+  /** The entities this person may see (an allow-list). Empty means every non-walled entity, and records with no entity. */
   entityIds: jsonb("entity_ids").$type<number[]>().notNull().default([]),
   lineOfDefence: text("line_of_defence"),
   totpSecret: text("totp_secret"),
@@ -146,6 +146,19 @@ export const apiTokens = pgTable("api_tokens", {
   createdBy: integer("created_by"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   revoked: boolean("revoked").notNull().default(false),
+  /** Roles the token acts as. Empty grants nothing. Never implied to be administrator. */
+  roles: jsonb("roles").$type<string[]>().notNull().default([]),
+  /** Allow-list. Ignored when groupWide is set. Empty and not group-wide grants no entities. */
+  entityIds: jsonb("entity_ids").$type<number[]>().notNull().default([]),
+  /** Every non-walled entity, and records with no entity. Walled entities stay hidden. */
+  groupWide: boolean("group_wide").notNull().default(false),
+});
+
+/** Shared counters for sign-in lockout and request rate limits. One row per key, so it holds across serverless instances. */
+export const authLimits = pgTable("auth_limits", {
+  key: text("key").primaryKey(),
+  n: integer("n").notNull(),
+  at: timestamp("at", { withTimezone: true }).notNull(),
 });
 
 export const appSettings = pgTable("app_settings", {
@@ -183,4 +196,8 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_required boolean NOT NULL DEFAULT
 ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_last_step integer;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS session_gen integer NOT NULL DEFAULT 0;
 CREATE TABLE IF NOT EXISTS api_tokens (id serial PRIMARY KEY, name text NOT NULL, token_hash text NOT NULL, created_by integer, created_at timestamptz NOT NULL DEFAULT now(), revoked boolean NOT NULL DEFAULT false);
+ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS roles jsonb NOT NULL DEFAULT '[]';
+ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS entity_ids jsonb NOT NULL DEFAULT '[]';
+ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS group_wide boolean NOT NULL DEFAULT false;
+CREATE TABLE IF NOT EXISTS auth_limits (key text PRIMARY KEY, n integer NOT NULL, at timestamptz NOT NULL);
 `;

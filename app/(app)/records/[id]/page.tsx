@@ -314,7 +314,7 @@ function PolicyPanel({ recordId, data, status, canLaunch, links }: { recordId: n
             <label className="block">
               <span className="font-semibold">Send to</span>
               <select name="scope" className="field-input mt-1">
-                <option value="all">All active staff</option>
+                <option value="all">Everyone who can see this policy</option>
                 <option value="staff">Staff role only</option>
                 <option value="board">Board members</option>
               </select>

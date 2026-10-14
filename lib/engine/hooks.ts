@@ -27,6 +27,8 @@ import {
   reviewDays,
   score,
   severityFromAmount,
+  FOUR_EYES_ACTORS,
+  fourEyesActors,
   thirdPartyTier,
   today,
 } from "./pure";
@@ -228,6 +230,9 @@ export function onTransition(
   if (t?.stamp) {
     d[t.stamp.by] = actorId;
     d[t.stamp.on] = today();
+  }
+  if (t?.fourEyes && actorId) {
+    d[FOUR_EYES_ACTORS] = [...fourEyesActors(d).filter((id) => id !== actorId), actorId];
   }
   if (def.hook === "risk" && key === "review") d.last_review = today();
   if (def.hook === "attestation" && key === "attest") {

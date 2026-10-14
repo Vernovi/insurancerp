@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { entityAllowed } from "@/lib/engine/permissions";
 import { eq } from "drizzle-orm";
 import { requireUser } from "@/lib/auth/current";
 import { getDb, schema } from "@/lib/db";
@@ -19,9 +20,9 @@ export default async function Pack({ params }: { params: Promise<{ id: string }>
   const [s] = await db.select().from(schema.snapshots).where(eq(schema.snapshots.id, Number(id)));
   if (!s) notFound();
   const raw = s.payload as { records: SnapRec[]; users: { id: number; name: string }[]; kpis: Kpi[]; takenAt: string; entity?: { id: number; name: string } | null };
-  // The entity wall applies to frozen packs too: a viewer never sees records of a walled entity they are not in.
-  if (raw.entity && user.deniedEntities.includes(raw.entity.id)) notFound();
-  const p = { ...raw, records: raw.records.filter((r) => !r.entityId || !user.deniedEntities.includes(r.entityId)) };
+  // The entity wall applies to frozen packs too, including rows with no entity and rows the viewer owns.
+  if (raw.entity && !entityAllowed(user, { entityId: raw.entity.id })) notFound();
+  const p = { ...raw, records: raw.records.filter((r) => entityAllowed(user, { entityId: r.entityId ?? null })) };
   const names = new Map(p.users.map((u) => [u.id, u.name]));
   const risks = p.records.filter((r) => r.typeKey === "risk" && r.status === "active");
   const appetite = p.records.filter((r) => r.typeKey === "appetite" && r.status === "approved");

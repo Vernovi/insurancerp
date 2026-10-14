@@ -3,7 +3,7 @@ import { cache } from "react";
 import { cookies } from "next/headers";
 import { asc } from "drizzle-orm";
 import { getDb, schema } from "./db";
-import type { PermUser } from "./engine/permissions";
+import { entityAllowed, type PermUser } from "./engine/permissions";
 
 export type Entity = typeof schema.entities.$inferSelect;
 export const ENTITY_COOKIE = "grc_entity";
@@ -38,8 +38,7 @@ export async function getScope(user: PermUser): Promise<Scope> {
 
 /** Does a row fall inside the scope? Mirrors the entity wall for aggregate views that read rows directly. */
 export function inScope(row: { entityId: number | null; ownerId?: number | null; createdBy?: number | null }, scope: Scope, user: PermUser): boolean {
+  if (!entityAllowed(user, row)) return false;
   if (scope.selected) return row.entityId === scope.selected.id;
-  if (row.entityId === null) return true;
-  if (!(user.deniedEntities ?? []).includes(row.entityId)) return true;
-  return row.ownerId === user.id || row.createdBy === user.id;
+  return true;
 }

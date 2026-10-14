@@ -10,17 +10,17 @@ let db: Awaited<ReturnType<typeof import("../lib/db").getDb>>;
 let schema: typeof import("../lib/db/schema");
 let E: typeof import("../lib/engine/records");
 
-/** Look up a demo user by email local part or first name. */
-async function userByEmail(prefix: string) {
-  const [u] = await db.select().from(schema.users).where(sql`(${schema.users.email} like ${prefix + "@%"} or ${schema.users.name} ilike ${prefix + " %"})`);
-  return { id: u.id, roles: u.roles as never[] };
-}
-/** A user as the app sees them, with walled entities they may not see. */
+/** A user as the app sees them: allow-list, group-wide flag, and the entities they may not see. */
 async function sessionUser(prefix: string) {
   const [u] = await db.select().from(schema.users).where(sql`(${schema.users.email} like ${prefix + "@%"} or ${schema.users.name} ilike ${prefix + " %"})`);
   const { deniedEntities } = await import("../lib/engine/permissions");
   const ents = await db.select({ id: schema.entities.id, walled: schema.entities.walled }).from(schema.entities);
-  return { id: u.id, roles: u.roles as never[], deniedEntities: deniedEntities(ents, (u.entityIds ?? []) as number[]) };
+  const entityIds = ((u.entityIds ?? []) as number[]).map(Number);
+  return { id: u.id, roles: u.roles as never[], entityIds, groupWide: entityIds.length === 0, deniedEntities: deniedEntities(ents, entityIds) };
+}
+/** Look up a demo user by email local part or first name. */
+async function userByEmail(prefix: string) {
+  return sessionUser(prefix);
 }
 function addMonthsIso(iso: string, m: number) {
   const d = new Date(iso + "T00:00:00Z");
@@ -238,7 +238,7 @@ describe("group, entities and walls", () => {
     for (const u of [zainab, kemi]) {
       const rows = await E.listRecords(u, "risk");
       expect(rows.length).toBeGreaterThan(0);
-      expect(rows.every((r) => r.entityId === insurer || r.entityId === null || r.ownerId === u.id || r.createdBy === u.id)).toBe(true);
+      expect(rows.every((r) => r.entityId === insurer)).toBe(true);
     }
     expect((await E.listRecords(hauwa, "risk")).some((r) => r.entityId === insurer && r.ownerId !== hauwa.id && r.createdBy !== hauwa.id)).toBe(false);
   });
@@ -254,7 +254,8 @@ describe("group, entities and walls", () => {
 
   it("refuses a loss event whose recoveries exceed the gross loss", async () => {
     const tunde = await sessionUser("tunde");
-    await expect(E.createRecord(tunde, "loss_event", { title: "Bad loss", ownerId: tunde.id, orgUnitId: null, entityId: null, raw: { description: "x", event_date: "2026-10-01", gross_loss: "0", recoveries: "400", currency: "NGN" } })).rejects.toThrow(/Recoveries/);
+    const insurer = (await byTitle("Under-reserving on motor and liability claims")).entityId;
+    await expect(E.createRecord(tunde, "loss_event", { title: "Bad loss", ownerId: tunde.id, orgUnitId: null, entityId: insurer, raw: { description: "x", event_date: "2026-10-01", gross_loss: "0", recoveries: "400", currency: "NGN" } })).rejects.toThrow(/Recoveries/);
   });
 
   it("uses an entity's own appetite before the group's", async () => {
@@ -275,6 +276,102 @@ describe("group, entities and walls", () => {
     expect((await byRef(k.ref)).data.kri_status).toBe("Amber");
     await E.addReading(tunde, k.id, { date: "2026-10-11", value: 14_000_000_000 });
     expect((await byRef(k.ref)).data.kri_status).toBe("Red");
+  });
+
+  it("keeps readings, campaigns, tokens and four-eyes inside the entity wall", async () => {
+    const { createHash } = await import("node:crypto");
+    const { apiUser } = await import("../lib/apiauth");
+    const { launchAttestationCampaign, launchDeclarationCampaign } = await import("../lib/engine/campaigns");
+    const { isLocked, strike, clearLimit, rateLimited, LOCK_AFTER } = await import("../lib/auth/limits");
+    const hauwa = await sessionUser("hauwa");
+    const kunle = await sessionUser("kunle");
+    const zainab = await sessionUser("zainab");
+    const tunde = await sessionUser("tunde");
+    const adaeze = await sessionUser("adaeze");
+    const funmi = await sessionUser("funmi");
+    const admin = await sessionUser("admin");
+    const insurerRisk = await byTitle("Under-reserving on motor and liability claims");
+    const amRisk = await byTitle("Dollar Fund liquidity squeeze on mass redemptions");
+    const motor = await byTitle("Motor claims ratio");
+    const pensionsKri = await byTitle("RSA reconciliation breaks open over 5 days");
+
+    await expect(E.addReading(hauwa, motor.id, { date: "2026-10-12", value: 70 })).rejects.toThrow(/not found/);
+    await expect(E.addReading(kunle, motor.id, { date: "2026-10-12", value: 70 })).rejects.toThrow(/not found/);
+    await E.addReading(hauwa, pensionsKri.id, { date: "2026-10-12", value: 3 });
+    expect((await byRef(pensionsKri.ref)).data.latest_value).toBe(3);
+
+    const [owned] = await db.select().from(schema.records).where(eq(schema.records.id, amRisk.id));
+    await db.update(schema.records).set({ ownerId: zainab.id, createdBy: zainab.id }).where(eq(schema.records.id, amRisk.id));
+    expect(await E.getRecordForUser(zainab, amRisk.id)).toBeNull();
+    expect((await E.listRecords(zainab, "risk")).some((r) => r.id === amRisk.id)).toBe(false);
+    expect(await E.getRecordForUser(kunle, amRisk.id)).not.toBeNull();
+    await db.update(schema.records).set({ ownerId: owned.ownerId, createdBy: owned.createdBy }).where(eq(schema.records.id, amRisk.id));
+
+    expect(kunle.groupWide).toBe(false);
+    expect((await E.listRecords(kunle, "risk")).every((r) => r.entityId === amRisk.entityId)).toBe(true);
+    expect((await E.listRecords(kunle, "risk")).some((r) => r.id === insurerRisk.id)).toBe(false);
+
+    const groupOnly = await E.createRecord(admin, "risk", { title: "Group-wide isolation check", ownerId: admin.id, orgUnitId: null, entityId: null, raw: { description: "x", category: "Operational risk" } });
+    expect(groupOnly.entityId).toBeNull();
+    expect(await E.getRecordForUser(zainab, groupOnly.id)).toBeNull();
+    expect(await E.getRecordForUser(kunle, groupOnly.id)).toBeNull();
+    expect(await E.getRecordForUser(admin, groupOnly.id)).not.toBeNull();
+    await expect(E.createRecord(zainab, "risk", { title: "Should not file group-wide", ownerId: zainab.id, orgUnitId: null, entityId: null, raw: { description: "x", category: "Operational risk" } })).rejects.toThrow(/access to that entity/);
+
+    const policy = await byTitle("Underwriting Policy");
+    const groupPolicy = await byTitle("Group Enterprise Risk Management Policy and Appetite Framework");
+    await expect(launchAttestationCampaign(hauwa, policy.id, "all")).rejects.toThrow(/not found/);
+    await expect(launchAttestationCampaign(zainab, groupPolicy.id, "all")).rejects.toThrow(/not found/);
+    const sent = await launchAttestationCampaign(zainab, policy.id, "all");
+    expect(sent).toMatch(/Sent to/);
+    const atts = await db.select().from(schema.records).where(eq(schema.records.title, `Attest: ${policy.title}`));
+    expect(atts.length).toBeGreaterThan(0);
+    expect(atts.every((a) => a.entityId === policy.entityId)).toBe(true);
+    expect(atts.some((a) => a.ownerId === funmi.id)).toBe(true);
+    expect(atts.some((a) => a.ownerId === hauwa.id)).toBe(false);
+
+    await launchDeclarationCampaign(hauwa, "2099");
+    const decls = await db.select().from(schema.records).where(eq(schema.records.title, "Annual declaration 2099"));
+    expect(decls.length).toBeGreaterThan(0);
+    expect(decls.every((d) => d.entityId === hauwa.entityIds[0])).toBe(true);
+    expect(decls.some((d) => d.ownerId === funmi.id)).toBe(false);
+    expect(decls.some((d) => d.ownerId === hauwa.id)).toBe(true);
+
+    const token = `grc_${"ab".repeat(24)}`;
+    await db.insert(schema.apiTokens).values({ name: "insurer-risk", tokenHash: createHash("sha256").update(token).digest("hex"), createdBy: admin.id, roles: ["risk"], entityIds: [insurerRisk.entityId!], groupWide: false });
+    const api = await apiUser(new Request("http://localhost/api/v1/records", { headers: { authorization: `Bearer ${token}` } }));
+    expect(api!.roles).toEqual(["risk"]);
+    expect(await E.getRecordForUser(api!, insurerRisk.id)).not.toBeNull();
+    expect(await E.getRecordForUser(api!, amRisk.id)).toBeNull();
+    const pensionsRisk = await byTitle("RSA fund assets not segregated from company accounts");
+    expect(await E.getRecordForUser(api!, pensionsRisk.id)).toBeNull();
+    const bare = `grc_${"cd".repeat(24)}`;
+    await db.insert(schema.apiTokens).values({ name: "unscoped", tokenHash: createHash("sha256").update(bare).digest("hex"), createdBy: admin.id, roles: ["admin"], entityIds: [], groupWide: false });
+    const nobody = await apiUser(new Request("http://localhost/api/v1/records", { headers: { authorization: `Bearer ${bare}` } }));
+    expect(await E.listRecords(nobody!, "risk")).toEqual([]);
+    const wideTok = `grc_${"ef".repeat(24)}`;
+    await db.insert(schema.apiTokens).values({ name: "group", tokenHash: createHash("sha256").update(wideTok).digest("hex"), createdBy: admin.id, roles: ["risk"], entityIds: [], groupWide: true });
+    const wide = await apiUser(new Request("http://localhost/api/v1/records", { headers: { authorization: `Bearer ${wideTok}` } }));
+    expect(await E.getRecordForUser(wide!, insurerRisk.id)).not.toBeNull();
+    expect(await E.getRecordForUser(wide!, pensionsRisk.id)).toBeNull();
+    expect(await E.getRecordForUser(wide!, groupOnly.id)).not.toBeNull();
+
+    const loss = await E.createRecord(funmi, "loss_event", { title: "Four eyes loss", ownerId: funmi.id, orgUnitId: null, entityId: insurerRisk.entityId, raw: { event_date: "2026-10-01", description: "A payment went to the wrong account", currency: "NGN", gross_loss: "1000" } });
+    await E.transitionRecord(tunde, loss.id, "validate");
+    await expect(E.transitionRecord(tunde, loss.id, "close")).rejects.toThrow(/already took a four-eyes/);
+    await E.transitionRecord(adaeze, loss.id, "close");
+    expect((await byRef(loss.ref)).status).toBe("closed");
+
+    const lockKey = "login:test:person@example.com";
+    for (let i = 0; i < LOCK_AFTER; i++) await strike(db, lockKey, 1_700_000_000_000);
+    expect(await isLocked(db, lockKey, 1_700_000_000_000 + 1000)).toBe(true);
+    expect(await isLocked(db, lockKey, 1_700_000_000_000 + 16 * 60_000)).toBe(false);
+    await clearLimit(db, lockKey);
+    expect(await isLocked(db, lockKey, 1_700_000_000_000)).toBe(false);
+    const rl = "portal:203.0.113.5";
+    for (let i = 0; i < 3; i++) expect(await rateLimited(db, rl, 3, 60_000, 1_700_000_100_000)).toBe(false);
+    expect(await rateLimited(db, rl, 3, 60_000, 1_700_000_100_000)).toBe(true);
+    expect(await rateLimited(db, rl, 3, 60_000, 1_700_000_100_000 + 61_000)).toBe(false);
   });
 
   it("converts USD losses to naira, bands them and links the risk", async () => {

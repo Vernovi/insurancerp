@@ -3,7 +3,7 @@ import { and, desc, eq, inArray, or, sql, type SQL } from "drizzle-orm";
 import { getDb, schema, type DB } from "../db";
 import type { TypeDef, Role } from "../defs/types";
 import { getTypeDef, loadTypes } from "./registry";
-import { canCreate, canEdit, canUseEntity, canView, isConfidential, type PermUser } from "./permissions";
+import { canCreate, canEdit, canUseEntity, canView, defaultEntityId, isConfidential, isGroupWide, type PermUser } from "./permissions";
 import { checkTransition, coerceFields, fieldVisible, today } from "./pure";
 import { after, compute, onTransition, type HookCtx, type HookRecord } from "./hooks";
 
@@ -176,6 +176,8 @@ export interface RecordInput {
   entityId?: number | null;
   raw: Record<string, unknown>;
   linkTo?: { id: number; kind: string };
+  /** Skip the "you were made owner" notice. Campaigns send their own. */
+  quiet?: boolean;
 }
 
 export async function createRecord(user: PermUser, typeKey: string, input: RecordInput): Promise<HookRecord> {
@@ -184,17 +186,23 @@ export async function createRecord(user: PermUser, typeKey: string, input: Recor
   if (!def) throw new EngineError("Unknown record type.");
   if (!canCreate(user, def)) throw new EngineError(`You don't have permission to create a ${def.label.toLowerCase()}.`);
   if (!input.title.trim()) throw new EngineError("Title is required.");
-  if (!canUseEntity(user, input.entityId)) throw new EngineError("You don't have access to that entity.");
+  const entityId = input.entityId === undefined ? defaultEntityId(user) : input.entityId;
+  if (!canUseEntity(user, entityId)) throw new EngineError("You don't have access to that entity.");
   const { data, errors } = coerceFields(def.fields, input.raw);
+  // Read-only display fields (for example the policy version on an attestation) are not on the form.
+  // A caller that passes them in raw may set them on create; computed fields are left to the hook.
+  for (const f of def.fields) {
+    if (f.readOnly && f.type !== "computed" && input.raw[f.key] !== undefined && input.raw[f.key] !== "") data[f.key] = input.raw[f.key];
+  }
   const missing = def.fields.filter((f) => f.required && !f.readOnly && fieldVisible(f, data) && f.type !== "checkbox" && (data[f.key] === null || data[f.key] === undefined || data[f.key] === ""));
   if (errors.length) throw new EngineError(errors.join(" "));
   if (missing.length) throw new EngineError(`Fill in: ${missing.map((f) => f.label).join(", ")}.`);
-  const rec = await insertRecord(db, def, { title: input.title, ownerId: input.ownerId, orgUnitId: input.orgUnitId, entityId: input.entityId ?? null, data }, user.id, 0);
+  const rec = await insertRecord(db, def, { title: input.title, ownerId: input.ownerId, orgUnitId: input.orgUnitId, entityId, data }, user.id, 0);
   if (input.linkTo) {
     const [target] = await db.select().from(schema.records).where(eq(schema.records.id, input.linkTo.id));
     if (target) await insertLink(db, input.linkTo.id, rec.id, input.linkTo.kind, user.id);
   }
-  if (rec.ownerId && rec.ownerId !== user.id && def.hook !== "action") {
+  if (!input.quiet && rec.ownerId && rec.ownerId !== user.id && def.hook !== "action") {
     await notifyUsers(db, [rec.ownerId], rec.id, `You were made owner of ${rec.ref}: ${rec.title}.`);
   }
   return rec;
@@ -279,6 +287,7 @@ export async function addReading(user: PermUser, id: number, reading: { date: st
   if (!prev) throw new EngineError("Record not found.");
   const def = await getTypeDef(prev.typeKey);
   if (!def || (def.hook !== "kri" && def.hook !== "esg_metric")) throw new EngineError("Readings are only for KRIs and ESG metrics.");
+  if (!canView(user, def, prev)) throw new EngineError("Record not found.");
   if (!canEdit(user, def, prev) && !user.roles.includes("risk") && !user.roles.includes("esg")) throw new EngineError("You can't add readings to this record.");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(reading.date) || !Number.isFinite(reading.value)) throw new EngineError("Enter a date and a numeric value.");
   const readings = Array.isArray((prev.data as Record<string, unknown>).readings) ? [...((prev.data as Record<string, unknown>).readings as object[])] : [];
@@ -343,6 +352,18 @@ export async function linkedRecords(db: DB, id: number, typeKey?: string) {
     .filter((x): x is NonNullable<typeof x> => !!x && (!typeKey || x.record.typeKey === typeKey));
 }
 
+/** SQL for the entity wall. Owning or creating a row does not widen it. Mirrors entityAllowed. */
+export function entityScopeSql(user: PermUser): SQL {
+  if (isGroupWide(user)) {
+    const denied = user.deniedEntities ?? [];
+    if (denied.length === 0) return sql`true`;
+    return or(sql`${schema.records.entityId} is null`, sql`${schema.records.entityId} not in (${sql.join(denied.map((d) => sql`${d}`), sql`, `)})`)!;
+  }
+  const ids = user.entityIds ?? [];
+  if (ids.length === 0) return sql`false`;
+  return inArray(schema.records.entityId, ids);
+}
+
 /** SQL condition applying the entity wall and the confidentiality wall (mirrors canView). */
 export async function visibilityFilter(user: PermUser): Promise<SQL> {
   const types = await loadTypes();
@@ -350,10 +371,7 @@ export async function visibilityFilter(user: PermUser): Promise<SQL> {
   const mine = or(eq(schema.records.ownerId, user.id), eq(schema.records.createdBy, user.id))!;
   const conds: SQL[] = [eq(schema.records.confidential, false), mine];
   if (allowed.length) conds.push(inArray(schema.records.typeKey, allowed));
-  const denied = user.deniedEntities ?? [];
-  if (denied.length === 0) return or(...conds)!;
-  const wall = or(sql`${schema.records.entityId} is null`, sql`${schema.records.entityId} not in (${sql.join(denied.map((d) => sql`${d}`), sql`, `)})`, mine)!;
-  return and(wall, or(...conds)!)!;
+  return and(entityScopeSql(user), or(...conds)!)!;
 }
 
 export interface ListFilters {

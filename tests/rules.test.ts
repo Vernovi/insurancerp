@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { base32Encode, hotp, totp, verifyTotp, stepAt, mfaMandatory, newSecret, base32Decode } from "../lib/auth/totp";
-import { capitalCover, claimsAgeing, caseClock, checkTransition, lossFigures, lossBand, lossProblems, nextDue, filingStatus, reminderPlan, orsaDue, fcrPublishDue, NON_LIFE_MCR_NGN } from "../lib/engine/pure";
-import { canView, canUseEntity, deniedEntities, entityAllowed } from "../lib/engine/permissions";
+import { capitalCover, claimsAgeing, caseClock, checkTransition, FOUR_EYES_ACTORS, lossFigures, lossBand, lossProblems, nextDue, filingStatus, reminderPlan, orsaDue, fcrPublishDue, NON_LIFE_MCR_NGN } from "../lib/engine/pure";
+import { canView, canUseEntity, campaignEntity, deniedEntities, entityAllowed } from "../lib/engine/permissions";
+import { healthBody } from "../lib/health";
+import { readFileSync } from "node:fs";
 import { rollPeriod, pickAppetite } from "../lib/engine/hooks";
 import { DEFAULT_TYPES } from "../lib/defs/modules";
 
@@ -60,16 +62,35 @@ describe("entity walls", () => {
     expect(deniedEntities(ents, [])).toEqual([3, 7]);
     expect(deniedEntities(ents, [1, 2, 3, 7])).toEqual([]);
   });
-  it("hides walled records, except from their owner and creator", () => {
-    const u = { id: 10, roles: ["cro" as const], deniedEntities: [7] };
-    const rec = (entityId: number | null, ownerId: number | null = 1) => ({ ownerId, createdBy: 2, confidential: false, entityId });
-    expect(canView(u, def("risk"), rec(7))).toBe(false);
-    expect(canView(u, def("risk"), rec(3))).toBe(true);
-    expect(canView(u, def("risk"), rec(null))).toBe(true);
-    expect(canView(u, def("risk"), rec(7, 10))).toBe(true);
-    expect(entityAllowed({ id: 1, roles: ["admin"], deniedEntities: [7] }, rec(7, 5))).toBe(false); // admin gets no bypass
-    expect(canUseEntity(u, 7)).toBe(false);
-    expect(canUseEntity(u, null)).toBe(true);
+  it("hides records outside the allow-list, including ones with no entity and ones the person owns", () => {
+    const ents = [{ id: 1, walled: false }, { id: 2, walled: false }, { id: 3, walled: true }, { id: 7, walled: true }];
+    const listed = { id: 10, roles: ["cro" as const], entityIds: [1, 3], groupWide: false, deniedEntities: deniedEntities(ents, [1, 3]) };
+    const wide = { id: 11, roles: ["cro" as const], entityIds: [] as number[], groupWide: true, deniedEntities: deniedEntities(ents, []) };
+    const rec = (entityId: number | null, ownerId: number | null = 1, createdBy: number | null = 2) => ({ ownerId, createdBy, confidential: false, entityId });
+    expect(canView(listed, def("risk"), rec(1))).toBe(true);
+    expect(canView(listed, def("risk"), rec(2))).toBe(false); // non-walled, but not on the allow-list
+    expect(canView(listed, def("risk"), rec(7, 10, 10))).toBe(false); // owner and creator do not cross the wall
+    expect(canView(listed, def("risk"), rec(null, 10, 10))).toBe(false);
+    expect(canView(wide, def("risk"), rec(1))).toBe(true);
+    expect(canView(wide, def("risk"), rec(null))).toBe(true);
+    expect(canView(wide, def("risk"), rec(7, 11, 11))).toBe(false);
+    expect(entityAllowed({ id: 1, roles: ["admin"], entityIds: [1], groupWide: false, deniedEntities: [7] }, rec(7, 1, 1))).toBe(false);
+    expect(canUseEntity(listed, 7)).toBe(false);
+    expect(canUseEntity(listed, null)).toBe(false);
+    expect(canUseEntity(wide, null)).toBe(true);
+    expect(canUseEntity(wide, 2)).toBe(true);
+  });
+  it("files a campaign child only where both sides can see it", () => {
+    const ents = [{ id: 1, walled: false }, { id: 3, walled: true }];
+    const pensions = { id: 4, roles: ["compliance" as const], entityIds: [3], groupWide: false, deniedEntities: [1] };
+    const insurer = { id: 5, roles: ["compliance" as const], entityIds: [1], groupWide: false, deniedEntities: [3] };
+    const wide = { id: 6, roles: ["compliance" as const], entityIds: [] as number[], groupWide: true, deniedEntities: [3] };
+    expect(campaignEntity(pensions, [3], ents, 1)).toBeUndefined();
+    expect(campaignEntity(insurer, [1], ents, 1)).toBe(1);
+    expect(campaignEntity(wide, [3], ents)).toBeUndefined();
+    expect(campaignEntity(wide, [], ents)).toBeNull();
+    expect(campaignEntity(pensions, [3, 1], ents)).toBe(3);
+    expect(campaignEntity(insurer, [], ents)).toBe(1);
   });
   it("applies the confidentiality wall inside a visible entity", () => {
     const inv = { id: 5, roles: ["investigator" as const], deniedEntities: [] };
@@ -207,6 +228,15 @@ describe("loss event checks", () => {
       expect(tr.fourEyes).toBe(true);
     }
   });
+  it("stops the person who validated a loss from also closing it", () => {
+    const loss = def("loss_event");
+    const reported = { status: "reported", ownerId: 1, createdBy: 1, data: {} };
+    expect(checkTransition(loss, reported, tr("loss_event", "validate"), { id: 2, roles: ["risk"] })).toBeNull();
+    const validated = { status: "validated", ownerId: 9, createdBy: 1, data: { [FOUR_EYES_ACTORS]: [2] } };
+    expect(checkTransition(loss, validated, tr("loss_event", "close"), { id: 2, roles: ["cro"] })).toMatch(/already took a four-eyes/);
+    expect(checkTransition(loss, validated, tr("loss_event", "close"), { id: 3, roles: ["cro"] })).toBeNull();
+    expect(checkTransition(loss, validated, tr("loss_event", "close"), { id: 1, roles: ["cro"] })).toMatch(/raised this record/);
+  });
 });
 
 describe("withdraw", () => {
@@ -217,6 +247,34 @@ describe("withdraw", () => {
       const w = t.workflow.transitions.find((x) => x.key === "withdraw");
       if (w && t.key !== "attestation") { expect(w.ownerAllowed).toBe(false); expect(w.commentRequired).toBe(true); }
     }
+  });
+});
+
+describe("health and headers", () => {
+  it("hides internal detail unless the caller is allowed to see it", () => {
+    expect(healthBody(true, false)).toEqual({ status: 200, body: { status: "ok" } });
+    expect(healthBody(false, true).body).toEqual({ status: "error" });
+    const detail = { database: "postgres", seeded: true, recordTypes: 41, lastReminderRun: "2026-10-13T06:49:00.000Z" };
+    expect(healthBody(true, true, detail).body).toMatchObject({ status: "ok", lastReminderRun: detail.lastReminderRun, recordTypes: 41 });
+    expect(healthBody(true, false, detail).body).toEqual({ status: "ok" });
+  });
+  it("sends a content security policy that keeps fonts on this origin", () => {
+    const src = readFileSync(new URL("../next.config.mjs", import.meta.url), "utf8");
+    expect(src).toContain('key: "Content-Security-Policy"');
+    expect(src).toContain("default-src 'self'");
+    expect(src).toContain("font-src 'self'");
+    expect(src).toContain("style-src 'self' 'unsafe-inline'");
+    expect(src).toContain("frame-ancestors 'none'");
+    expect(src).toContain('key: "X-Content-Type-Options"');
+    expect(src).not.toMatch(/fonts\.googleapis|fonts\.gstatic/);
+  });
+});
+
+describe("demo password", () => {
+  it("does not keep a fixed local password in the seed", () => {
+    const src = readFileSync(new URL("../lib/db/seed.ts", import.meta.url), "utf8");
+    expect(src).not.toContain("LOCAL_DEFAULT_PASSWORD");
+    expect(src).not.toMatch(/return \{ value: "[^"]+"/);
   });
 });
 

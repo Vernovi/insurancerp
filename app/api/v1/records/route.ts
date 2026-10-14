@@ -2,11 +2,24 @@ import { NextResponse } from "next/server";
 import { apiUser } from "@/lib/apiauth";
 import { createRecord, listRecords, EngineError } from "@/lib/engine/records";
 import { loadTypes } from "@/lib/engine/registry";
+import { getDb } from "@/lib/db";
+import { clientAddress, rateLimited } from "@/lib/auth/limits";
 
 export const dynamic = "force-dynamic";
 
-/** GET /api/v1/records?type=risk&status=active&q=fraud  |  POST { type, title, ownerId?, data } */
+async function limit(req: Request) {
+  const db = await getDb();
+  const ip = clientAddress(req.headers);
+  if (await rateLimited(db, `api:${ip}`, 120, 60_000)) {
+    return NextResponse.json({ error: "Too many requests. Try again shortly." }, { status: 429, headers: { "retry-after": "60" } });
+  }
+  return null;
+}
+
+/** GET /api/v1/records?type=risk&status=active&q=fraud  |  POST { type, title, ownerId?, entityId?, data } */
 export async function GET(req: Request) {
+  const blocked = await limit(req);
+  if (blocked) return blocked;
   const user = await apiUser(req);
   if (!user) return NextResponse.json({ error: "Missing or invalid bearer token." }, { status: 401 });
   const u = new URL(req.url);
@@ -19,9 +32,11 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
+  const blocked = await limit(req);
+  if (blocked) return blocked;
   const user = await apiUser(req);
   if (!user) return NextResponse.json({ error: "Missing or invalid bearer token." }, { status: 401 });
-  let body: { type?: string; title?: string; ownerId?: number; orgUnitId?: number; data?: Record<string, unknown> };
+  let body: { type?: string; title?: string; ownerId?: number; orgUnitId?: number; entityId?: number | null; data?: Record<string, unknown> };
   try {
     body = await req.json();
   } catch {
@@ -29,7 +44,7 @@ export async function POST(req: Request) {
   }
   if (!body.type || !body.title) return NextResponse.json({ error: "type and title are required." }, { status: 400 });
   try {
-    const rec = await createRecord(user, body.type, { title: body.title, ownerId: body.ownerId ?? null, orgUnitId: body.orgUnitId ?? null, raw: body.data ?? {} });
+    const rec = await createRecord(user, body.type, { title: body.title, ownerId: body.ownerId ?? null, orgUnitId: body.orgUnitId ?? null, entityId: "entityId" in body ? (body.entityId ?? null) : undefined, raw: body.data ?? {} });
     return NextResponse.json(rec, { status: 201 });
   } catch (e) {
     if (e instanceof EngineError) return NextResponse.json({ error: e.message }, { status: 422 });

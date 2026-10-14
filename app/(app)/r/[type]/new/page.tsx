@@ -54,6 +54,7 @@ export default async function NewRecord({ params, searchParams }: { params: Prom
         linkTo={linkTo}
         submitLabel={`Create ${midSentence(def.label)}`}
         defaultOwner={user.id}
+        allowUnassigned={user.entityIds.length === 0}
       />
     </div>
   );

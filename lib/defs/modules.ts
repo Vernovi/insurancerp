@@ -1351,7 +1351,7 @@ for (const t of DEFAULT_TYPES) {
   if (later.length) w.transitions.push({ key: "withdraw", label: "Withdraw", from: later, to: "withdrawn", roles, ownerAllowed: false, commentRequired: true });
 }
 
-// Loss events: validating and closing need someone other than the person who reported or owns the loss.
+// Loss events: validating and closing need someone other than the reporter or owner, and not the same person for both.
 for (const t of DEFAULT_TYPES) {
   if (t.key !== "loss_event") continue;
   for (const tr of t.workflow.transitions) if (tr.key === "validate" || tr.key === "close") Object.assign(tr, { ownerAllowed: false, fourEyes: true });

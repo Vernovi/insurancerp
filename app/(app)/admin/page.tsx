@@ -128,7 +128,7 @@ export default async function Admin() {
 
       <section aria-labelledby="ent-h" className="space-y-3">
         <h2 id="ent-h" className="text-lg font-semibold">Group entities</h2>
-        <p className="max-w-2xl text-sm text-ink-2">Each legal entity carries its licence, regulators and applicable frameworks; its own appetite is set in Risk appetite. People see only the entities ticked for them; someone with none ticked sees every entity except walled ones. A record&apos;s owner and creator can always see it. * marks walled entities.</p>
+        <p className="max-w-2xl text-sm text-ink-2">Each legal entity carries its licence, regulators and applicable frameworks; its own appetite is set in Risk appetite. People see only the entities ticked for them. Someone with none ticked sees every entity except walled ones, and records with no entity. Owning or raising a record does not extend that. * marks walled entities.</p>
         <div className="grid gap-3 lg:grid-cols-2">
           {ents.map((e) => (
             <ActionForm key={e.id} action={saveEntityAction} resetOnOk={false} className="space-y-2 rounded-md border border-line bg-surface p-4 text-sm">
@@ -170,21 +170,38 @@ export default async function Admin() {
       <section aria-labelledby="api-h" className="space-y-3">
         <h2 id="api-h" className="text-lg font-semibold">API access</h2>
         <p className="max-w-2xl text-sm text-ink-2">
-          Tokens let other systems read and create records through <code>/api/v1/records</code>. Send the token as <code>Authorization: Bearer &lt;token&gt;</code>. Tokens act with administrator rights, so give each system its own and revoke unused ones.
+          Tokens let other systems read and create records through <code>/api/v1/records</code>. Send the token as <code>Authorization: Bearer &lt;token&gt;</code>. Each token has its own roles and entities. It is not an administrator unless you tick that role. Walled entities stay hidden from a group-wide token. Existing tokens created before this change have no roles and no entities until you replace them.
         </p>
         <ul className="divide-y divide-line-2 rounded-md border border-line bg-surface text-sm">
-          {tokens.map((t) => (
-            <li key={t.id} className="flex items-center justify-between px-4 py-2">
-              <span>{t.name} <span className="text-ink-3">created {fmtDateTime(t.createdAt)}</span> {t.revoked && <span className="font-semibold text-bad">revoked</span>}</span>
-              {!t.revoked && (
-                <form action={revokeApiTokenAction}><input type="hidden" name="id" value={t.id} /><button className="btn btn-danger py-1 text-xs">Revoke</button></form>
-              )}
-            </li>
-          ))}
+          {tokens.map((t) => {
+            const codes = ((t.entityIds ?? []) as number[]).map((id) => ents.find((e) => e.id === id)?.code).filter(Boolean);
+            const scope = t.groupWide ? "group-wide, except walled entities" : codes.length ? codes.join(", ") : "no entities";
+            return (
+              <li key={t.id} className="flex items-center justify-between gap-3 px-4 py-2">
+                <span>{t.name} <span className="text-ink-3">created {fmtDateTime(t.createdAt)} · {(t.roles as string[]).join(", ") || "no roles"} · {scope}</span> {t.revoked && <span className="font-semibold text-bad">revoked</span>}</span>
+                {!t.revoked && (
+                  <form action={revokeApiTokenAction}><input type="hidden" name="id" value={t.id} /><button className="btn btn-danger py-1 text-xs">Revoke</button></form>
+                )}
+              </li>
+            );
+          })}
           {tokens.length === 0 && <li className="px-4 py-3 text-ink-2">No tokens yet.</li>}
         </ul>
-        <ActionForm action={createApiTokenAction} className="flex items-end gap-2" resetOnOk={false}>
+        <ActionForm action={createApiTokenAction} className="space-y-3" resetOnOk={false}>
           <label className="block text-sm"><span className="font-semibold">Token name</span><input name="name" placeholder="e.g. Power BI, SecureComply" className="field-input mt-1 w-72" /></label>
+          <fieldset>
+            <legend className="text-sm font-semibold">Roles this token acts as</legend>
+            <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
+              {ROLES.map((r) => <label key={r} className="flex items-center gap-1 text-sm"><input type="checkbox" name="roles" value={r} /> {r}</label>)}
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend className="text-sm font-semibold">Entities</legend>
+            <label className="mt-1 flex items-center gap-2 text-sm"><input type="checkbox" name="groupWide" /> Group-wide (every entity except walled ones)</label>
+            <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
+              {ents.map((e) => <label key={e.id} className="flex items-center gap-1 text-sm"><input type="checkbox" name="entities" value={e.id} /> {e.code}{e.walled ? " (walled)" : ""}</label>)}
+            </div>
+          </fieldset>
           <button className="btn btn-primary">Create token</button>
         </ActionForm>
       </section>
