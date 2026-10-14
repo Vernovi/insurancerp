@@ -3,8 +3,18 @@ import type { TypeDef, Role } from "../defs/types";
 export interface PermUser {
   id: number;
   roles: Role[];
-  /** Entities whose records this person may not see (see deniedEntities). */
+  /** Entities whose records this person may not see. For group-wide people this is the walled entities. */
   deniedEntities?: number[];
+  /**
+   * Allow-list. Empty means group-wide only when `groupWide` is true (or omitted): every non-walled
+   * entity, plus records with no entity. A non-empty list is the only set of entities this person may see.
+   */
+  entityIds?: number[];
+  /**
+   * Set false for an API token with no entities ticked, so an empty list means no access.
+   * Omitted, an empty `entityIds` still means group-wide, which is how people are stored.
+   */
+  groupWide?: boolean;
 }
 export interface PermRecord {
   ownerId: number | null;
@@ -25,16 +35,36 @@ export function deniedEntities(entities: { id: number; walled: boolean }[], memb
   return entities.filter((e) => e.walled).map((e) => e.id);
 }
 
-/** Entity scope: records of an entity outside the person's scope are visible only to the record's owner and creator. */
-export function entityAllowed(u: PermUser, r: PermRecord): boolean {
-  if (r.entityId === null || r.entityId === undefined) return true;
-  if (!(u.deniedEntities ?? []).includes(r.entityId)) return true;
-  return r.ownerId === u.id || r.createdBy === u.id;
+/** Empty membership on a person. Tokens pass `groupWide: false` so an empty list grants nothing. */
+export function isGroupWide(u: PermUser): boolean {
+  if (typeof u.groupWide === "boolean") return u.groupWide;
+  return (u.entityIds ?? []).length === 0;
 }
 
-/** Can this person file or move records into an entity? */
+/**
+ * Entity scope. Group-wide people see every non-walled entity and records with no entity.
+ * Everyone else sees only their allow-list. Owning or creating a row does not cross that line,
+ * and a row with no entity is not on a subsidiary allow-list.
+ */
+export function entityAllowed(u: PermUser, r: { entityId?: number | null }): boolean {
+  const entityId = r.entityId ?? null;
+  if (entityId === null) return isGroupWide(u);
+  if (isGroupWide(u)) return !(u.deniedEntities ?? []).includes(entityId);
+  return (u.entityIds ?? []).includes(entityId);
+}
+
+/** Can this person file or move records into an entity? Null is the group-wide bucket. */
 export function canUseEntity(u: PermUser, entityId: number | null | undefined): boolean {
-  return entityId === null || entityId === undefined || !(u.deniedEntities ?? []).includes(entityId);
+  return entityAllowed(u, { entityId: entityId ?? null });
+}
+
+/**
+ * When a caller omits the entity, file into their first allowed entity.
+ * Group-wide callers, and an explicit null, stay on the group-wide bucket (null), which `canUseEntity` then accepts or refuses.
+ */
+export function defaultEntityId(u: PermUser): number | null {
+  if (isGroupWide(u)) return null;
+  return u.entityIds?.[0] ?? null;
 }
 
 export function canCreate(u: PermUser, def: TypeDef): boolean {
@@ -50,7 +80,8 @@ export function isConfidential(def: TypeDef, data: Record<string, unknown>): boo
 
 /**
  * Two walls apply: the entity wall, then the type's confidentiality wall. Confidential records are
- * visible to their owner, creator and the type's named roles only. Admins do not see them by default.
+ * visible to their owner, creator and the type's named roles only, and only inside an entity they may see.
+ * Admins do not see confidential records by default.
  */
 export function canView(u: PermUser, def: TypeDef, r: PermRecord): boolean {
   if (!entityAllowed(u, r)) return false;
@@ -68,4 +99,33 @@ export function canEdit(u: PermUser, def: TypeDef, r: PermRecord): boolean {
 /** Roles that may see confidential records of this type, for SQL filters. */
 export function confidentialRoles(def: TypeDef): Role[] {
   return def.confidential?.roles ?? [];
+}
+
+/**
+ * Entity to file a campaign child into for one person.
+ * `undefined` means they share no in-scope entity with the launcher (skip them).
+ * `null` means a group-wide row, which only a group-wide person can see.
+ * When `recordEntityId` is set (a policy), the child stays on that entity and the person must be able to see it.
+ */
+export function campaignEntity(
+  launcher: PermUser,
+  targetEntityIds: number[],
+  entities: { id: number; walled: boolean }[],
+  recordEntityId?: number | null,
+): number | null | undefined {
+  const target: PermUser = {
+    id: 0,
+    roles: [],
+    entityIds: targetEntityIds,
+    groupWide: targetEntityIds.length === 0,
+    deniedEntities: deniedEntities(entities, targetEntityIds),
+  };
+  if (recordEntityId !== undefined) {
+    return entityAllowed(target, { entityId: recordEntityId }) ? recordEntityId : undefined;
+  }
+  const walled = new Set(entities.filter((e) => e.walled).map((e) => e.id));
+  if (isGroupWide(launcher) && targetEntityIds.length === 0) return null;
+  if (isGroupWide(launcher)) return targetEntityIds.find((id) => !walled.has(id));
+  if (targetEntityIds.length === 0) return (launcher.entityIds ?? []).find((id) => !walled.has(id));
+  return (launcher.entityIds ?? []).find((id) => targetEntityIds.includes(id));
 }

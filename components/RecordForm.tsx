@@ -25,6 +25,7 @@ export default function RecordForm({
   linkTo,
   submitLabel,
   defaultOwner,
+  allowUnassigned = false,
 }: {
   def: TypeDef;
   action: (s: ActionState, fd: FormData) => Promise<ActionState>;
@@ -36,6 +37,8 @@ export default function RecordForm({
   linkTo?: { id: number; kind: string; label: string };
   submitLabel: string;
   defaultOwner: number;
+  /** Group-wide people may file a record with no entity. An allow-list may not. */
+  allowUnassigned?: boolean;
 }) {
   const [state, run, pending] = useActionState(action, undefined);
   const [data, setData] = useState<Record<string, unknown>>(values?.data ?? {});
@@ -152,8 +155,8 @@ export default function RecordForm({
             </label>
             <label className="block">
               <span className="text-sm font-semibold">Entity</span>
-              <select name="__entity" defaultValue={values?.entityId ? String(values.entityId) : ""} className="field-input mt-1">
-                <option value="">Group-wide (no entity)</option>
+              <select name="__entity" defaultValue={values?.entityId ? String(values.entityId) : allowUnassigned ? "" : entities[0] ? String(entities[0].id) : ""} className="field-input mt-1">
+                {allowUnassigned && <option value="">Group-wide (no entity)</option>}
                 {entities.map((e) => (
                   <option key={e.id} value={e.id}>{e.name}</option>
                 ))}

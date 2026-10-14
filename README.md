@@ -4,9 +4,11 @@ Configurable governance, risk and compliance platform for a multi-entity, multi-
 group with an insurer at its core, built to the PRD "GRC Platform PRD".
 
 The group is modelled as legal entities (licence, regulators, applicable frameworks, own appetite).
-Every record belongs to an entity or is group-wide; dashboards roll up across entities with an entity
-switcher for drill-down, and walled entities (for example a PFA or a bank) are hidden from people who
-are not members of them, in lists, search, exports, the API and board packs.
+Every record belongs to an entity or is group-wide. A person's entities are an allow-list: with none
+ticked they see every entity except walled ones, and records that have no entity. With any ticked,
+they see only those entities. Owning or creating a record does not widen that. Walled entities
+(for example a PFA or a bank) stay hidden from people who are not members, in lists, search, exports,
+the API and board packs. Dashboards roll up with an entity switcher for drill-down.
 
 One record-and-workflow engine; every register below is configuration stored in the database
 and editable by administrators (Settings, Registers, fields and workflows).
@@ -37,7 +39,7 @@ deliberately not rebuilt: they come from SecureComply (set `SECURECOMPLY_API_URL
   large gifts route to Compliance.
 - Closing a case with a write-off posts a loss event to ERM.
 - A continuity exercise that misses impact tolerance raises an ERM risk linked to the service.
-- KRIs turning red notify the owner and CRO. Four-eyes rules stop people approving what they raised.
+- KRIs turning red notify the owner and CRO. Four-eyes rules stop the person who raised a record, and anyone who already took a four-eyes step on it, from taking the next one.
 - Returns calendar: owners are reminded 14, 7 and 1 days before a due date; the day after it is missed
   Compliance and the CRO who can see the entity are alerted daily for a week, then weekly. Filing a
   recurring return schedules the next period.
@@ -54,10 +56,13 @@ npm test             # business rules and end-to-end workflow tests
 
 Without `DATABASE_URL` the app uses an embedded Postgres (PGlite) seeded with a fictional group,
 "Demo Financial Group" (labelled FICTIONAL DEMO DATA in the app). Demo accounts are
-role-named, e.g. `group.cro@demofinancial.example` (full list in `lib/db/seed.ts` and below). On localhost they use the local default
-password in `lib/db/seed.ts`; a deployed demo (Vercel) uses `DEMO_PASSWORD`, and without it a random
-password nobody knows, so the public site never runs on a published password. Changing
-`DEMO_PASSWORD` and redeploying rotates the demo accounts' password on the next boot.
+role-named, e.g. `group.cro@demofinancial.example` (full list in `lib/db/seed.ts` and below).
+Set `DEMO_PASSWORD` (12+ characters) for a stable local password. If it is unset, a local seed
+prints a random password once in the terminal; it is not written into the source. A deployed demo
+uses `DEMO_PASSWORD`, and without it a random password nobody knows, so the public site never runs
+on a published password. Changing `DEMO_PASSWORD` and redeploying rotates the demo accounts on the
+next boot. A database that was seeded while an old fixed local password was in the source is rotated
+off that value on the next boot.
 
 | Email (@demofinancial.example) | Person | Role in the demo |
 |---|---|---|
@@ -110,7 +115,9 @@ the UK on fictional data; Nigeria data residency and the NDPA transfer basis are
 
 ## API
 
-Create a token in Settings, then:
+Create a token in Settings and choose its roles and entities (or group-wide, which still hides walled
+entities). The token is not an administrator unless that role is ticked. A call that omits `entityId`
+files into the token's first entity, or leaves the record group-wide when the token is. Then:
 
 ```bash
 curl -H "Authorization: Bearer grc_..." "https://<host>/api/v1/records?type=risk&status=active"

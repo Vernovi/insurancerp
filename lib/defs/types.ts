@@ -82,7 +82,7 @@ export interface TransitionDef {
   ownerAllowed?: boolean;
   /** Fields that must have a value before the transition. */
   requires?: string[];
-  /** The person who created the record may not trigger this transition. */
+  /** The creator, and anyone who already took a four-eyes step on this record, may not trigger this transition. */
   fourEyes?: boolean;
   commentRequired?: boolean;
   /** Fields holding user ids; the person acting must be none of them (e.g. a second, different director). */

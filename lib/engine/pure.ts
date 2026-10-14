@@ -184,6 +184,15 @@ export interface RecordLike {
   data: Record<string, unknown>;
 }
 
+/** User ids that have already taken a four-eyes step on this record. */
+export const FOUR_EYES_ACTORS = "_four_eyes";
+
+export function fourEyesActors(data: Record<string, unknown>): number[] {
+  const v = data[FOUR_EYES_ACTORS];
+  if (!Array.isArray(v)) return [];
+  return v.map((x) => Number(x)).filter((n) => Number.isFinite(n));
+}
+
 /** Returns an error message, or null when the transition is allowed. */
 export function checkTransition(
   def: TypeDef,
@@ -200,6 +209,7 @@ export function checkTransition(
   const roleMatch = (isAdmin && !t.strictRoles) || (t.roles ?? []).some((r) => actor.roles.includes(r));
   if (t.ownerAllowed === false && isOwner) return `The record owner cannot "${t.label}"; someone independent must do it.`;
   if (t.fourEyes && isCreator) return `Four-eyes rule: the person who raised this record cannot "${t.label}".`;
+  if (t.fourEyes && fourEyesActors(rec.data).includes(actor.id)) return `Four-eyes rule: someone who already took a four-eyes step cannot "${t.label}".`;
   if (t.roles && t.roles.length > 0) {
     if (t.strictRoles && !roleMatch) return `Only these roles can "${t.label}": ${t.roles.join(", ")}.`;
     if (!roleMatch && !(isOwner && t.ownerAllowed !== false)) return `Only these roles can "${t.label}": ${t.roles.join(", ")}.`;

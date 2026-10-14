@@ -19,6 +19,8 @@ export interface SessionUser {
   orgUnitId: number | null;
   managerId: number | null;
   entityIds: number[];
+  /** No entities ticked: every non-walled entity, and records with no entity. */
+  groupWide: boolean;
   /** Entities outside this person's scope. */
   deniedEntities: number[];
   lineOfDefence: string | null;
@@ -47,6 +49,7 @@ export const getCurrentUser = cache(async (): Promise<SessionUser | null> => {
     orgUnitId: u.orgUnitId,
     managerId: u.managerId,
     entityIds,
+    groupWide: entityIds.length === 0,
     deniedEntities: deniedEntities(entities, entityIds),
     lineOfDefence: u.lineOfDefence,
     mfaEnabled: u.mfaEnabled,

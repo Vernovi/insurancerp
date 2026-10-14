@@ -34,6 +34,7 @@ export default async function EditRecord({ params }: { params: Promise<{ id: str
         values={{ title: r.title, ownerId: r.ownerId, orgUnitId: r.orgUnitId, entityId: r.entityId, data: r.data as Record<string, unknown> }}
         submitLabel="Save changes"
         defaultOwner={user.id}
+        allowUnassigned={user.entityIds.length === 0}
       />
     </div>
   );

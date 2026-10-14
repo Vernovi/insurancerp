@@ -1,10 +1,23 @@
 import { NextResponse } from "next/server";
 import { apiUser } from "@/lib/apiauth";
 import { getRecordForUser, transitionRecord, updateRecord, EngineError } from "@/lib/engine/records";
+import { getDb } from "@/lib/db";
+import { clientAddress, rateLimited } from "@/lib/auth/limits";
 
 export const dynamic = "force-dynamic";
 
+async function limit(req: Request) {
+  const db = await getDb();
+  const ip = clientAddress(req.headers);
+  if (await rateLimited(db, `api:${ip}`, 120, 60_000)) {
+    return NextResponse.json({ error: "Too many requests. Try again shortly." }, { status: 429, headers: { "retry-after": "60" } });
+  }
+  return null;
+}
+
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const blocked = await limit(req);
+  if (blocked) return blocked;
   const user = await apiUser(req);
   if (!user) return NextResponse.json({ error: "Missing or invalid bearer token." }, { status: 401 });
   const found = await getRecordForUser(user, Number((await params).id));
@@ -14,6 +27,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
 
 /** PATCH { title?, ownerId?, data?, transition?, comment? } */
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const blocked = await limit(req);
+  if (blocked) return blocked;
   const user = await apiUser(req);
   if (!user) return NextResponse.json({ error: "Missing or invalid bearer token." }, { status: 401 });
   const id = Number((await params).id);

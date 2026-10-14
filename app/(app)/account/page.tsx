@@ -32,7 +32,7 @@ export default async function Account() {
           <div><dt className="text-xs font-semibold text-ink-3">Roles</dt><dd>{user.roles.map((r) => ROLE_LABELS[r as Role] ?? r).join(", ")}</dd></div>
           <div><dt className="text-xs font-semibold text-ink-3">Entities</dt><dd>{myEntities.length ? myEntities.map((e) => e.name).join(", ") : "Group-wide (no walled entities)"}</dd></div>
         </dl>
-        <p className="mt-3 text-xs text-ink-3">You see records of the entities listed here only (or, if none are listed, every entity except walled ones), plus records you own or raised. An administrator manages your access.</p>
+        <p className="mt-3 text-xs text-ink-3">You see records of the entities listed here only. If none are listed, you see every entity except walled ones, and records that have no entity. Records you own or raised stay hidden when they sit outside that scope. An administrator manages your access.</p>
       </section>
       <section className="rounded-md border border-line bg-surface p-5 text-sm" aria-labelledby="mfa-h">
         <h2 id="mfa-h" className="text-base font-semibold">Two-step sign-in</h2>

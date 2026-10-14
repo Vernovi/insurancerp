@@ -83,7 +83,7 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
       {module === "declarations" && hasRole(user, "compliance") && (
         <section className="rounded-md border border-line bg-surface p-5">
           <h2 className="text-base font-semibold">Annual declaration campaign</h2>
-          <p className="mt-1 text-sm text-ink-2">Creates a draft annual declaration for every active member of staff who doesn&apos;t have one, and notifies them.</p>
+          <p className="mt-1 text-sm text-ink-2">Creates a draft annual declaration for each active person who shares an entity with you and does not already have one. A group-wide launcher does not include people who only belong to a walled entity.</p>
           <ActionForm action={launchDeclarationCampaign} className="mt-3 flex items-end gap-3" resetOnOk={false}>
             <label className="block">
               <span className="text-sm font-semibold">Year</span>

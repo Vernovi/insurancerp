@@ -30,13 +30,18 @@ export const DEMO_DOMAIN = "demofinancial.example";
 export const DEMO_EMAIL_RENAMES: Record<string, string> = {"kemi.adebayo": "erm.committee.chair", "ifeoma.nnaji": "independent.director", "adaeze.okafor": "group.cro", "tunde.bakare": "head.erm", "ngozi.eze": "group.cco", "zainab.lawal": "compliance.officer", "hauwa.sani": "pensions.risk", "kunle.ajayi": "asset.mgmt.risk", "tobi.fashola": "mfb.compliance", "musa.garba": "infra.bank.cco", "ibrahim.musa": "chief.auditor", "chidi.okonkwo": "investigator", "halima.bello": "hse.esg", "funmi.adeyemi": "head.claims", "emeka.nwosu": "head.underwriting", "bola.ogunleye": "group.cfo", "segun.alabi": "group.cio", "amaka.obi": "head.actuarial", "yusuf.danjuma": "risk.champion"};
 
 const LEGACY_DEMO_ADMIN = "admin@demo-insurance.ng";
-/** Local development only. Deployed demos use DEMO_PASSWORD or, without it, a random unknown password. */
-const LOCAL_DEFAULT_PASSWORD = "Demo!2026grc";
 
-function demoPassword(): { value: string; source: "env" | "random" | "local" } {
+/**
+ * Demo sign-in password. DEMO_PASSWORD when set. Otherwise a random value.
+ * On a local machine that random value is printed once, at seed time. It is not stored in this file.
+ */
+export function demoPassword(): { value: string; source: "env" | "random" } {
   if (process.env.DEMO_PASSWORD) return { value: process.env.DEMO_PASSWORD, source: "env" };
-  if (process.env.VERCEL_ENV) return { value: randomBytes(24).toString("base64url"), source: "random" };
-  return { value: LOCAL_DEFAULT_PASSWORD, source: "local" };
+  const value = randomBytes(18).toString("base64url");
+  if (!process.env.VERCEL && !process.env.VERCEL_ENV) {
+    console.info(`[vernovi-grc] Local demo password (copy it now; it is not shown again): ${value}`);
+  }
+  return { value, source: "random" };
 }
 
 const DATA_TABLES = ["records", "record_links", "record_versions", "comments", "audit_log", "notifications", "snapshots", "counters", "users", "org_units", "api_tokens", "entities"];
@@ -120,8 +125,12 @@ async function syncDemoPassword(db: DB) {
   if (env) {
     if (stored && stored.startsWith("scrypt$") && verifyPassword(env, stored)) return;
     value = env;
-  } else if (process.env.VERCEL_ENV && stored === "local") {
-    value = randomBytes(24).toString("base64url"); // a deployed demo must never keep the published local default
+  } else if (stored === "local") {
+    // Databases seeded while a fixed local password lived in this file. Rotate it; do not keep using that value.
+    value = randomBytes(24).toString("base64url");
+    if (!process.env.VERCEL && !process.env.VERCEL_ENV) {
+      console.info(`[vernovi-grc] Demo password rotated because this database used the old local default. This boot's password: ${value}`);
+    }
   }
   if (!value) return;
   await db.execute(sql`UPDATE users SET password_hash = ${hashPassword(value)}, session_gen = session_gen + 1 WHERE email LIKE ${"%@" + DEMO_DOMAIN}`);
